@@ -4,12 +4,12 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # Damselfly is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with Damselfly.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -24,16 +24,16 @@ from dragonfly import (Grammar, Rule, MappingRule, CompoundRule,
 from dragonfly.actions.action_base import DynStrActionBase
 
 myName = 'Damselfly'
-myVersion='2013-09-30'
-myID = myName + ' v. ' + myVersion 
+myVersion = '2013-09-30'
+myID = myName + ' v. ' + myVersion
 print myID
 
-## need to figure out where natlink resides
+# need to figure out where natlink resides
 status = natlinkstatus.NatlinkStatus()
 
 # fifos to SnapDragonServer
 
-## is this a reasonable way of divining the natlink path?
+# is this a reasonable way of divining the natlink path?
 natLinkPath = status.getCoreDirectory().rstrip('core')
 
 serverOut = natLinkPath + 'damselServerOut'
@@ -45,17 +45,24 @@ fpI = None
 
 windowCache = {}
 
+
 class ConnectionDropped(Exception):
-    def __init__(self, value = None):
+
+    def __init__(self, value=None):
         self.value = value
+
     def __str__(self):
         return repr(self.value)
 
+
 class CommandFailure(Exception):
+
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return repr(self.value)
+
 
 def connect():
     global fpO, fpI, connected
@@ -76,7 +83,7 @@ def connect():
             connected = True
 
             print 'Sending greeting (could block)... ',
-            fpO.write(myID+'\n')
+            fpO.write(myID + '\n')
             fpO.flush()
             print 'Success'
 
@@ -107,6 +114,7 @@ def disconnect():
 
     connected = False
 
+
 def resumeServer():
     if connected:
         try:
@@ -118,9 +126,10 @@ def resumeServer():
             if res != 'Success':
                 raise CommandFailure(res)
         except (CommandFailure, KeyboardInterrupt, IOError) as e:
-            print "caught exception:" +  str(e) + 'aborting and disconnecting'
+            print "caught exception:" + str(e) + 'aborting and disconnecting'
             disconnect()
             raise ConnectionDropped()
+
 
 def getXCtx():
     if connected:
@@ -140,29 +149,33 @@ def getXCtx():
             print 'response received: ', xctx
             return xctx
         except (KeyboardInterrupt, IOError) as e:
-            print "caught exception:" +  str(e) + 'aborting and disconnecting'
+            print "caught exception:" + str(e) + 'aborting and disconnecting'
             disconnect()
             raise ConnectionDropped()
 
 # custom contexts
 
+
 def reCmp(pattern, string):
     return pattern.search(string) is not None
+
 
 def strCmp(sub, string):
     return sub in string
 
+
 class XAppContext(Context):
-    def __init__(self, wmname = None, wmclass = None, wid = None, usereg = False):
+
+    def __init__(self, wmname=None, wmclass=None, wid=None, usereg=False):
         self.wmname = wmname
-        
+
         if wmclass is None:
             self.wmclass = wmname
             self.either = True
         else:
             self.wmclass = wmclass
             self.either = False
-                
+
         self.wid = wid
 
         if usereg:
@@ -177,19 +190,17 @@ class XAppContext(Context):
         else:
             self.myCmp = strCmp
 
-        self.emptyCtx = (wmname is None) & (wmclass is None) & (wid is None) 
-        self._str = "name: " + str(wmname) + ", " + "class: " + str(wmclass) + ", " + "id: " + str(wid)
-
+        self.emptyCtx = (wmname is None) & (wmclass is None) & (wid is None)
+        self._str = "name: " + \
+            str(wmname) + ", " + "class: " + \
+            str(wmclass) + ", " + "id: " + str(wid)
 
     def matches(self, executable, title, handle):
         if connected:
             if self.emptyCtx:
                 return True
-            else :
-#                if (executable != '') or (title != '') or (handle != 0):
-#                    return False
-        
-                iMatch = True        
+            else:
+                iMatch = True
 
                 try:
                     ctx = getXCtx()
@@ -200,23 +211,26 @@ class XAppContext(Context):
                     return False
 
                 if self.either:
-                    iMatch &= self.myCmp(self.wmname, ctx[0]) | self.myCmp(self.wmclass, ctx[1])
+                    iMatch &= self.myCmp(
+                        self.wmname, ctx[0]) | self.myCmp(self.wmclass, ctx[1])
                 else:
-                    if self.wmname:                   
+                    if self.wmname:
                         iMatch &= self.myCmp(self.wmname, ctx[0])
 
                     if self.wmclass:
                         iMatch &= self.myCmp(self.wmclass, ctx[1])
-                
-                    
+
                 if self.wid:
                     iMatch &= (ctx[2] == self.wid)
-
+                print ("%s == %s" %
+                       (self.wmname, ctx[0]), "%s == %s" % (self.wmclass, ctx[1]), iMatch)
                 return iMatch
-        else :
+        else:
             return False
 
 # custom actions: prepare for the babbyscape
+
+
 def dispatchAndHandle(mess):
     if connected:
         try:
@@ -227,7 +241,7 @@ def dispatchAndHandle(mess):
             print 'waiting for response... ',
             res = fpI.readline().strip()
             print 'response received: ', res
-        
+
             if res.startswith('Failure'):
                 raise CommandFailure(res)
             elif res != 'Success':
@@ -237,15 +251,17 @@ def dispatchAndHandle(mess):
             print 'Execution failed: ' + str(e)
             return False
         except (KeyboardInterrupt, IOError) as e:
-            print "Caught exception:" +  str(e) + ': aborting and disconnecting'
+            print "Caught exception:" + str(e) + ': aborting and disconnecting'
             disconnect()
             raise ConnectionDropped()
     else:
         return False
 
+
 class FocusXWindow(DynStrActionBase):
-    def __init__(self, spec, search = None, static = False):
-        DynStrActionBase.__init__(self, spec = spec, static = static)
+
+    def __init__(self, spec, search=None, static=False):
+        DynStrActionBase.__init__(self, spec=spec, static=static)
         if not search:
             self.search = 'any'
         else:
@@ -253,18 +269,23 @@ class FocusXWindow(DynStrActionBase):
 
     def _execute_events(self, events):
         if (self.search == 'any') and (self._pspec in windowCache):
-            mymess = 'focusXWindow\n' + 'id' + '\n' + windowCache[self._pspec] + '\n'
+            mymess = 'focusXWindow\n' + 'id' + \
+                '\n' + windowCache[self._pspec] + '\n'
         else:
-            mymess = 'focusXWindow\n' + self.search + '\n' + str(self._pspec) + '\n'
+            mymess = 'focusXWindow\n' + self.search + \
+                '\n' + str(self._pspec) + '\n'
         return(dispatchAndHandle(mymess))
 
     def _parse_spec(self, spec):
         self._pspec = spec
         return self
+
 
 class HideXWindow(DynStrActionBase):
-    def __init__(self, spec = None, search = None, static = False):
-        DynStrActionBase.__init__(self, spec = str(spec), static = (spec is None))
+
+    def __init__(self, spec=None, search=None, static=False):
+        DynStrActionBase.__init__(
+            self, spec=str(spec), static=(spec is None))
         if not search:
             self.search = 'any'
         else:
@@ -272,24 +293,28 @@ class HideXWindow(DynStrActionBase):
 
     def _execute_events(self, events):
         if (self.search == 'any') and (self._pspec in windowCache):
-            mymess = 'hideXWindow\n' + 'id' + '\n' + windowCache[self._pspec] + '\n'
+            mymess = 'hideXWindow\n' + 'id' + \
+                '\n' + windowCache[self._pspec] + '\n'
         else:
-            mymess = 'hideXWindow\n' + self.search + '\n' + str(self._pspec) + '\n'
+            mymess = 'hideXWindow\n' + self.search + \
+                '\n' + str(self._pspec) + '\n'
         return(dispatchAndHandle(mymess))
 
     def _parse_spec(self, spec):
         self._pspec = spec
         return self
 
+
 class CacheXWindow(DynStrActionBase):
-    def __init__(self, spec, static = False, forget = False):
-        DynStrActionBase.__init__(self, spec = str(spec), static = static)
+
+    def __init__(self, spec, static=False, forget=False):
+        DynStrActionBase.__init__(self, spec=str(spec), static=static)
         self.search = 'id'
-        self.forget =  forget
+        self.forget = forget
 
     def _execute_events(self, events):
         global windowCache
-        if not self.forget:            
+        if not self.forget:
             xctx = getXCtx()
             if xctx:
                 windowCache[self._pspec] = str(xctx[2])
@@ -302,14 +327,15 @@ class CacheXWindow(DynStrActionBase):
                 del windowCache[self._pspec]
             else:
                 return False
-            
+
     def _parse_spec(self, spec):
         self._pspec = spec
         return self
 
 
 class BringXApp(ActionBase):
-    def __init__(self, execname, winname = None, timeout = 5.0):
+
+    def __init__(self, execname, winname=None, timeout=5.0):
         ActionBase.__init__(self)
         self.execname = execname
         if winname == None:
@@ -323,8 +349,10 @@ class BringXApp(ActionBase):
         mymess += str(self.timeout) + '\n'
         return(dispatchAndHandle(mymess))
 
+
 class WaitXWindow(ActionBase):
-    def __init__(self, title, timeout = 5.0):
+
+    def __init__(self, title, timeout=5.0):
         ActionBase.__init__(self)
         self.winname = title
         self.timeout = timeout
@@ -333,7 +361,9 @@ class WaitXWindow(ActionBase):
         mymess = 'waitXWindow\n' + self.title + '\n' + str(self.timeout) + '\n'
         return(dispatchAndHandle(mymess))
 
+
 class StartXApp(ActionBase):
+
     def __init__(self, execname):
         ActionBase.__init__(self)
         self.execname = execname
@@ -342,7 +372,9 @@ class StartXApp(ActionBase):
         mymess = 'startXApp\n' + self.execname + '\n'
         return(dispatchAndHandle(mymess))
 
+
 class XKey(DynStrActionBase):
+
     def _execute_events(self, events):
         mymess = 'sendXKeys\n' + self._pspec + '\n'
         return(dispatchAndHandle(mymess))
@@ -351,7 +383,9 @@ class XKey(DynStrActionBase):
         self._pspec = spec
         return self
 
+
 class XMouse(DynStrActionBase):
+
     def _execute_events(self, events):
         mymess = 'sendXMouse\n' + self._pspec + '\n'
         return(dispatchAndHandle(mymess))
@@ -360,10 +394,13 @@ class XMouse(DynStrActionBase):
         self._pspec = spec
         return self
 
-## neither autoformat nor pause are considered atm
+# neither autoformat nor pause are considered atm
+
+
 class XText(DynStrActionBase):
-    def __init__(self, spec, static = False, space = True, title = False, upper = False):
-        DynStrActionBase.__init__(self, spec = str(spec), static = static)
+
+    def __init__(self, spec, static=False, space=True, title=False, upper=False):
+        DynStrActionBase.__init__(self, spec=str(spec), static=static)
         self.space = space
         self.title = title
         self.upper = upper
@@ -378,22 +415,23 @@ class XText(DynStrActionBase):
             tspec = tspec.title()
         elif self.upper:
             tspec = tspec.upper()
-            
+
         if not self.space:
-            tspec = tspec.replace(' ','')
-            
+            tspec = tspec.replace(' ', '')
+
         mymess = 'sendXText\n' + tspec + '\n'
         return(dispatchAndHandle(mymess))
 
+
 class DoNothing(ActionBase):
-    def __init__(self, message = 'Recognition event consumed.'):
+
+    def __init__(self, message='Recognition event consumed.'):
         self.message = message
-        
+
     def _execute(self, data=None):
         print self.message
-        
-# custom grammars
 
+# custom grammars
 
 
 # rules
@@ -403,11 +441,13 @@ class ConnectRule(CompoundRule):
     def _process_recognition(self, node, extras):
         connect()
 
+
 class DisconnectRule(CompoundRule):
     spec = "damselfly disconnect"
 
     def _process_recognition(self, node, extras):
         disconnect()
+
 
 class ResumeRule(CompoundRule):
     spec = "damselfly resume"
@@ -417,151 +457,156 @@ class ResumeRule(CompoundRule):
         print 'Resumed.'
 
 # rudimentary wm control
+
+
 class WMRule(MappingRule):
     mapping = {
-        "win hide" : HideXWindow(),
-        "win hide <text>" : HideXWindow("%(text)s"),
-        "win cache <text>" : CacheXWindow("%(text)s"),
-        "win forget <text>" : CacheXWindow("%(text)s", forget = True),
-        "win focus <text>" : FocusXWindow("%(text)s"),
-        }
+        "win hide": HideXWindow(),
+        "win hide <text>": HideXWindow("%(text)s"),
+        "win cache <text>": CacheXWindow("%(text)s"),
+        "win forget <text>": CacheXWindow("%(text)s", forget=True),
+        "win focus <text>": FocusXWindow("%(text)s"),
+    }
     extras = [
         Dictation("text")
-        ]
-    
+    ]
+
 # these rules consume events which could cause dragon to hang or behave
 # strangely in linux
 
+
 class DNSOverride(MappingRule):
     mapping = {
-        "type [<text>]" : DoNothing(),
-        "MouseGrid [<text>]" : DoNothing(),
-        "mouse [<text>]" : DoNothing(),
-        "copy [(that | line)]" : DoNothing(),
-        "paste [that]" : DoNothing(),
-        }
+        "type [<text>]": DoNothing(),
+        "MouseGrid [<text>]": DoNothing(),
+        "mouse [<text>]": DoNothing(),
+        "copy [(that | line)]": DoNothing(),
+        "paste [that]": DoNothing(),
+    }
     extras = [
         Dictation("text")
-        ]
+    ]
 
-######################################################################
+#
 # USER DEFINED RULES BELOW THIS POINT                                #
-######################################################################
+#
 
-#######################################
-## charkey : basic character input
-#######################################
+#
+# charkey : basic character input
+#
+
 
 class CharkeyRule(MappingRule):
     mapping = {
-        "alpha" : XKey("a"),
-        "bravo" : XKey("b"),
-        "Charlie" : XKey("c"),
-        "delta" : XKey("d"),
-        "echo" : XKey("e"),
-        "foxtrot" : XKey("f"),
-        "golf" : XKey("g"),
-        "hotel" : XKey("h"),
-        "India" : XKey("i"),
-        "Jill" : XKey("j"),
-        "kilo" : XKey("k"),
-        "Lima" : XKey("l"),
-        "Mike" : XKey("m"),
-        "nova" : XKey("n"),
-        "Oscar" : XKey("o"),
-        "papa" : XKey("p"),
-        "Quebec" : XKey("q"),
-        "Romeo" : XKey("r"),
-        "sick" : XKey("s"),
-        "tango" : XKey("t"),
-        "unit" : XKey("u"),
-        "Victor" : XKey("v"),
-        "whiskey" : XKey("w"),
-        "xray" : XKey("x"),
-        "yankee" : XKey("y"),
-        "Zulu" : XKey("z"),
-        "one" : XKey("1"),
-        "(to | two | too)" : XKey("2"),
-        "three" : XKey("3"),
-        "four" : XKey("4"),
-        "five" : XKey("5"),
-        "six" : XKey("6"),
-        "seven" : XKey("7"),
-        "eight" : XKey("8"),
-        "nine" : XKey("9"),
-        "zero" : XKey("0"),
-        "dot" : XText("."),
-        "plus" : XText("+"),
-        "(minus | hyphen)" : XText("-"),
-        "stress" : XText("_"),
-        "star" : XText("*"),
-        "bar" : XText("|"),
-        "dollar" : XText("$"),
-        "equals" : XText("="),
-        "caret" : XText("^"),
-        "bang" : XText("!"),
-        "colon" : XText(":"),
-        "semi" : XText(";"),
-        "pound" : XText("#"),
-        "tilde" : XText("~"),
-        "Andy" : XText("&"),
-        "Atoll" : XText("@"),
-        "slash" : XText("/"),
-        "lash" : XKey("backslash"),
-        "quest" : XText("?"),
-        "grave" : XText("`"),
-        "percent" : XKey('percent'),
-        "lesser" : XText('<'),
-        "greater" : XText('>'),
-        "candy" : XKey('comma'),
-        "brace left" : XText('{'),
-        "brace right" : XText('}'),
-        "pen left" : XText('('),
-        "pen right" : XText(')'),
-        "rack left" : XText('['),
-        "rack right" : XText(']'),
-        "home" : XKey("home"),
-        "end" : XKey("end"),
-        "tab" : XKey("tab"),
-        "enter" : XKey("enter"),
-        "space" : XKey("space"),
-        "quote" : XKey("dquote"),
-        "tick" : XKey("squote"),
-        "dirk <text>" : XText("%(text)s", space = False),
-        "camel <text>" : XText("%(text)s", space = False, title = True),
-        "caps <text>" :  XText("%(text)s", space = False, upper = True),
+        "alpha": XKey("a"),
+        "bravo": XKey("b"),
+        "Charlie": XKey("c"),
+        "delta": XKey("d"),
+        "echo": XKey("e"),
+        "foxtrot": XKey("f"),
+        "golf": XKey("g"),
+        "hotel": XKey("h"),
+        "India": XKey("i"),
+        "Jill": XKey("j"),
+        "kilo": XKey("k"),
+        "Lima": XKey("l"),
+        "Mike": XKey("m"),
+        "nova": XKey("n"),
+        "Oscar": XKey("o"),
+        "papa": XKey("p"),
+        "Quebec": XKey("q"),
+        "Romeo": XKey("r"),
+        "sick": XKey("s"),
+        "tango": XKey("t"),
+        "unit": XKey("u"),
+        "Victor": XKey("v"),
+        "whiskey": XKey("w"),
+        "xray": XKey("x"),
+        "yankee": XKey("y"),
+        "Zulu": XKey("z"),
+        "one": XKey("1"),
+        "(to | two | too)": XKey("2"),
+        "three": XKey("3"),
+        "four": XKey("4"),
+        "five": XKey("5"),
+        "six": XKey("6"),
+        "seven": XKey("7"),
+        "eight": XKey("8"),
+        "nine": XKey("9"),
+        "zero": XKey("0"),
+        "dot": XText("."),
+        "plus": XText("+"),
+        "(minus | hyphen)": XText("-"),
+        "stress": XText("_"),
+        "star": XText("*"),
+        "bar": XText("|"),
+        "dollar": XText("$"),
+        "equals": XText("="),
+        "caret": XText("^"),
+        "bang": XText("!"),
+        "colon": XText(":"),
+        "semi": XText(";"),
+        "pound": XText("#"),
+        "tilde": XText("~"),
+        "Andy": XText("&"),
+        "Atoll": XText("@"),
+        "slash": XText("/"),
+        "lash": XKey("backslash"),
+        "quest": XText("?"),
+        "grave": XText("`"),
+        "percent": XKey('percent'),
+        "lesser": XText('<'),
+        "greater": XText('>'),
+        "candy": XKey('comma'),
+        "brace left": XText('{'),
+        "brace right": XText('}'),
+        "pen left": XText('('),
+        "pen right": XText(')'),
+        "rack left": XText('['),
+        "rack right": XText(']'),
+        "home": XKey("home"),
+        "end": XKey("end"),
+        "tab": XKey("tab"),
+        "enter": XKey("enter"),
+        "space": XKey("space"),
+        "quote": XKey("dquote"),
+        "tick": XKey("squote"),
+        "dirk <text>": XText("%(text)s", space=False),
+        "camel <text>": XText("%(text)s", space=False, title=True),
+        "caps <text>":  XText("%(text)s", space=False, upper=True),
         "shank <text>": XText("%(text)s"),
-        }
+    }
     extras = [
         Dictation("text"),
-        ]
-        
-########################################
+    ]
+
+#
 # emacs
-########################################
+#
+
 
 class EmacsEditRule(MappingRule):
     mapping = {
-        "up [<n>]" : XKey("up:%(n)d"),
-        "down [<n>]" : XKey("down:%(n)d"),
-        "left [<n>]" : XKey("left:%(n)d"),
-        "right [<n>]" : XKey("right:%(n)d"),
+        "up [<n>]": XKey("up:%(n)d"),
+        "down [<n>]": XKey("down:%(n)d"),
+        "left [<n>]": XKey("left:%(n)d"),
+        "right [<n>]": XKey("right:%(n)d"),
         "page [<n>]": XKey("pgdown:%(n)d"),
         "leaf [<n>]": XKey("pgup:%(n)d"),
-        "tab [<n>]" : XKey("tab:%(n)d"),
+        "tab [<n>]": XKey("tab:%(n)d"),
         "page right": XKey("ca-v"),
         "leaf right": XKey("cas-v"),
-        "top" : XKey("c-home"),
-        "bottom" : XKey("m-rangle"),
-        "top right" : XKey("m-home"),
-        "bottom right" : XKey("m-end"),
-        "word [<n>]" :  XKey("c-u,%(n)d,a-f"),
-        "vow [<n>]" :  XKey("c-u,%(n)d,a-b"),
-        "skip [<n>]" :  XKey("c-u,%(n)d,ca-f"),
-        "creep [<n>]" :  XKey("c-u,%(n)d,ca-b"),
-        "hence [<n>]" :  XKey("c-u,%(n)d,a-e"),
-        "whence [<n>]" :  XKey("c-u,%(n)d,a-a"),
-        "del [<n>]" : XKey("del:%(n)d"),
+        "top": XKey("c-home"),
+        "bottom": XKey("m-rangle"),
+        "top right": XKey("m-home"),
+        "bottom right": XKey("m-end"),
+        "word [<n>]":  XKey("c-u,%(n)d,a-f"),
+        "vow [<n>]":  XKey("c-u,%(n)d,a-b"),
+        "skip [<n>]":  XKey("c-u,%(n)d,ca-f"),
+        "creep [<n>]":  XKey("c-u,%(n)d,ca-b"),
+        "hence [<n>]":  XKey("c-u,%(n)d,a-e"),
+        "whence [<n>]":  XKey("c-u,%(n)d,a-a"),
+        "del [<n>]": XKey("del:%(n)d"),
         "rub [<n>]": XKey("backspace:%(n)d"),
         "kill [<n>]": XKey("c-u,%(n)d,c-k"),
         "kill line": XKey("home,c-k"),
@@ -573,7 +618,7 @@ class EmacsEditRule(MappingRule):
         "wedge": XKey("home,enter,up,c-y"),
         "save": XKey("c-x,c-s"),
         "open": XKey("c-x,c-f"),
-        "open <text>": XKey("c-x,c-f,tab:2,w-c,c-s")+XText("%(text)s"),
+        "open <text>": XKey("c-x,c-f,tab:2,w-c,c-s") + XText("%(text)s"),
         "swap": XKey("c-x,o"),
         "mark": XKey("c-space"),
         "mark from <text> to <other>": XKey("c-s") + XText("%(text)s") + XKey("enter,c-r,enter:2,c-space,c-s") + XText("%(other)s") + XKey("enter"),
@@ -585,52 +630,52 @@ class EmacsEditRule(MappingRule):
         "pinch in from <text> to <other>": XKey("c-r") + XText("%(text)s") + XKey("enter,c-s,enter:2,c-space,c-s") + XText("%(other)s") + XKey("enter,m-w"),
         "swipe": XKey("c-space,c-e,m-w"),
         "lift": XKey("c-w"),
-        "quit": XKey("c-g"), #+ XText("keyboard-quit")  + XKey("enter"),
+        "quit": XKey("c-g"),  # + XText("keyboard-quit")  + XKey("enter"),
         "solo": XKey("c-x,1"),
-        "limbo" : XKey("c-x,2"),
-        "split" : XKey("c-x,3"),
-        "goto" : XKey("m-g,g"),
-        "undo [<n>]" :  XKey("c-u,%(n)d,c-slash"),
+        "limbo": XKey("c-x,2"),
+        "split": XKey("c-x,3"),
+        "goto": XKey("m-g,g"),
+        "undo [<n>]":  XKey("c-u,%(n)d,c-slash"),
         "exit stage": XKey("c-x,c-c"),
-        "find" : XKey("c-s"),
-        "find <text>" : XKey("c-s") + XText("%(text)s"),
-        "scout" : XKey("c-r"),
-        "scout <text>" : XKey("c-r") + XText("%(text)s"),
-        "hunt" : XKey("ca-s"),
+        "find": XKey("c-s"),
+        "find <text>": XKey("c-s") + XText("%(text)s"),
+        "scout": XKey("c-r"),
+        "scout <text>": XKey("c-r") + XText("%(text)s"),
+        "hunt": XKey("ca-s"),
         "track": XKey("cm-r"),
         "grill": XKey("m-percent"),
         "grill <text>": XKey("m-percent") + XText("%(text)s"),
-        "grill <text> with <other>" : XKey("m-percent") + XText("%(text)s") + XKey("enter") + XText("%(other)s")+ XKey("enter"),
+        "grill <text> with <other>": XKey("m-percent") + XText("%(text)s") + XKey("enter") + XText("%(other)s") + XKey("enter"),
         "query": XKey("cm-percent"),
-        "sub" : XKey("m-x") + XText("replace-string") + XKey("enter"),
-        "sub <text> with <other>" : XKey("m-x") + XText("replace-string") + XKey("enter") + XText("%(text)s") + XKey("enter") + XText("%(other)s")+ XKey("enter"),
-        "manual" : XKey("m-x") + XText("man") + XKey("enter"),
-        "manual <text>" : XKey("m-x") + XText("man") + XKey("enter") + XText("%(text)s"),
-        "macro start" : XKey("c-x,lparen"),
-        "macro end" : XKey("c-x,rparen"),
-        "macro do" : XKey("c-x,e"),
-        "macro name" : XKey("c-x,c-k,n"),
-        "macro name <text>" : XKey("c-x,c-k,n") + XText("%(text)s") + XKey("enter"),
+        "sub": XKey("m-x") + XText("replace-string") + XKey("enter"),
+        "sub <text> with <other>": XKey("m-x") + XText("replace-string") + XKey("enter") + XText("%(text)s") + XKey("enter") + XText("%(other)s") + XKey("enter"),
+        "manual": XKey("m-x") + XText("man") + XKey("enter"),
+        "manual <text>": XKey("m-x") + XText("man") + XKey("enter") + XText("%(text)s"),
+        "macro start": XKey("c-x,lparen"),
+        "macro end": XKey("c-x,rparen"),
+        "macro do": XKey("c-x,e"),
+        "macro name": XKey("c-x,c-k,n"),
+        "macro name <text>": XKey("c-x,c-k,n") + XText("%(text)s") + XKey("enter"),
         "tap": XText("e"),
-        "cast" : XKey("m-x"),
-        "cast <text>" : XKey("m-x") + XText("%(text)s") + XKey("enter"),
-        "point" : XKey("c-x,r,space"),
-        "point [<n>]" : XKey("c-x,r,space") + XText("%(n)d"),
-        "jump" : XKey("c-x,r,j"),
-        "jump [<n>]" : XKey("c-x,r,j") + XText("%(n)d"),
-        "buff" : XKey("c-x,b"),
-        "buff <text>" : XKey("c-x,b,c-s") + XText("%(text)s") + XKey("enter:2"),
-        "buffer" : XKey("c-x,b,enter"),
-        "murder" : XKey("c-x,k"),
-        "murder <text>" : XKey("c-x,k,c-s") + XText("%(text)s") + XKey("enter:2"),
-        "execute" : XKey("c-x,k,enter"),
-        "fill" : XKey("m-x") + XText("fill-region") + XKey("enter"),
+        "cast": XKey("m-x"),
+        "cast <text>": XKey("m-x") + XText("%(text)s") + XKey("enter"),
+        "point": XKey("c-x,r,space"),
+        "point [<n>]": XKey("c-x,r,space") + XText("%(n)d"),
+        "jump": XKey("c-x,r,j"),
+        "jump [<n>]": XKey("c-x,r,j") + XText("%(n)d"),
+        "buff": XKey("c-x,b"),
+        "buff <text>": XKey("c-x,b,c-s") + XText("%(text)s") + XKey("enter:2"),
+        "buffer": XKey("c-x,b,enter"),
+        "murder": XKey("c-x,k"),
+        "murder <text>": XKey("c-x,k,c-s") + XText("%(text)s") + XKey("enter:2"),
+        "execute": XKey("c-x,k,enter"),
+        "fill": XKey("m-x") + XText("fill-region") + XKey("enter"),
         "indent": XKey("ca-backslash"),
         "get": XKey("a-slash"),
         "yes": XText("yes") + XKey("enter"),
         "no": XText("no") + XKey("enter"),
-        "yep": XKey("c-x,z"),        
-        "help" : XKey("c-h,question"),
+        "yep": XKey("c-x,z"),
+        "help": XKey("c-h,question"),
         "clamp": XKey("lbracket,rbracket,left"),
         "clamp <text>": XText("[%(text)s]"),
         "fix": XKey("lparen,rparen,left"),
@@ -643,26 +688,27 @@ class EmacsEditRule(MappingRule):
         "imply <text>": XText('"%(text)s"'),
         "allude": XKey("squote:2,left"),
         "allude <text>": XText("'%(text)s'"),
-        "apropos" : XKey("m-x") + XText("apropos") + XKey("enter"),
-        "apropos <text>" : XKey("m-x") + XText("apropos") + XKey("enter") + XText("%(text)s") + XKey("enter"),
-        "describe function" : XKey("m-x") + XText("describe-function") + XKey("enter"),
-        "describe variable" : XKey("m-x") + XText("describe-variable") + XKey("enter"),
+        "apropos": XKey("m-x") + XText("apropos") + XKey("enter"),
+        "apropos <text>": XKey("m-x") + XText("apropos") + XKey("enter") + XText("%(text)s") + XKey("enter"),
+        "describe function": XKey("m-x") + XText("describe-function") + XKey("enter"),
+        "describe variable": XKey("m-x") + XText("describe-variable") + XKey("enter"),
         "clear": XKey("c-l"),
-        "text mode" : XKey("m-x") + XText("text-mode") + XKey("enter"),
-        "mini" : XKey("w-o"),
-        "completions" : XKey("w-c"),
-        "mini quit" : XKey("w-o,c-g"),
-        "up case" : XKey("a-c"),
-        "eval" : XKey("c-x,c-e"),
-        }
+        "text mode": XKey("m-x") + XText("text-mode") + XKey("enter"),
+        "mini": XKey("w-o"),
+        "completions": XKey("w-c"),
+        "mini quit": XKey("w-o,c-g"),
+        "up case": XKey("a-c"),
+        "eval": XKey("c-x,c-e"),
+    }
     extras = [
         IntegerRef("n", 1, 20),
         Dictation("text"),
         Dictation("other"),
-        ]
+    ]
     defaults = {
         "n": 1,
-        }
+    }
+
 
 class BringEmacsRule(CompoundRule):
     spec = "bring emacs"
@@ -672,78 +718,82 @@ class BringEmacsRule(CompoundRule):
         if res == False:
             resumeServer()
 
+
 class EmacsDictRule(MappingRule):
     mapping = {
         "command save": XKey("c-x,c-s"),
         "command open": XKey("c-x,c-f"),
-        "command open <text>": XKey("c-x,c-f,tab:2,w-c,c-s")+XText("%(text)s"),
+        "command open <text>": XKey("c-x,c-f,tab:2,w-c,c-s") + XText("%(text)s"),
         "command swap": XKey("c-x,o"),
-        "command split" : XKey("c-x,3"),
-        "command buff" : XKey("c-x,b"),
-        "command buff <text>" : XKey("c-x,b,c-s") + XText("%(text)s") + XKey("enter:2"),
-        "command buffer" : XKey("c-x,b,enter"),
-        "command fundamental mode" : XKey("m-x") + XText("fundamental-mode") + XKey("enter"),
-        "command home" : XKey("home"),
-        "command end" : XKey("end"),
-        "command enter" : XKey("enter"),
-        "command up [<n>]" : XKey("up:%(n)d"),
-        "command down [<n>]" : XKey("down:%(n)d"),
-        "command left [<n>]" : XKey("left:%(n)d"),
-        "command right [<n>]" : XKey("right:%(n)d"),
+        "command split": XKey("c-x,3"),
+        "command buff": XKey("c-x,b"),
+        "command buff <text>": XKey("c-x,b,c-s") + XText("%(text)s") + XKey("enter:2"),
+        "command buffer": XKey("c-x,b,enter"),
+        "command fundamental mode": XKey("m-x") + XText("fundamental-mode") + XKey("enter"),
+        "command home": XKey("home"),
+        "command end": XKey("end"),
+        "command enter": XKey("enter"),
+        "command up [<n>]": XKey("up:%(n)d"),
+        "command down [<n>]": XKey("down:%(n)d"),
+        "command left [<n>]": XKey("left:%(n)d"),
+        "command right [<n>]": XKey("right:%(n)d"),
         "command page [<n>]": XKey("pgdown:%(n)d"),
         "command leaf [<n>]": XKey("pgup:%(n)d"),
         "command page right": XKey("ca-v"),
         "command leaf right": XKey("cas-v"),
-        "command top" : XKey("c-home"),
-        "command bottom" : XKey("m-rangle"),
-        "command top right" : XKey("m-home"),
-        "command bottom right" : XKey("m-end"),
-        "command word [<n>]" :  XKey("c-u,%(n)d,a-f"),
-        "command vow [<n>]" :  XKey("c-u,%(n)d,a-b"),
-        "command del [<n>]" : XKey("del:%(n)d"),
+        "command top": XKey("c-home"),
+        "command bottom": XKey("m-rangle"),
+        "command top right": XKey("m-home"),
+        "command bottom right": XKey("m-end"),
+        "command word [<n>]":  XKey("c-u,%(n)d,a-f"),
+        "command vow [<n>]":  XKey("c-u,%(n)d,a-b"),
+        "command del [<n>]": XKey("del:%(n)d"),
         "command rub [<n>]": XKey("backspace:%(n)d"),
         "command kill [<n>]": XKey("c-u,%(n)d,c-k"),
         "command slay [<n>]": XKey("c-u,%(n)d,a-d"),
         "command snuff [<n>]": XKey("c-u,%(n)d,a-backspace"),
         "command yank": XKey("c-y"),
-        "command undo [<n>]" :  XKey("c-u,%(n)d,c-slash"),
-        "command cast" : XKey("m-x"),
-        "up case" : XKey("a-c"),
-        "shank <text>": XText("%(text)s")+XKey("space"),
-        "<text>" : XText("%(text)s")+XKey("space"),
-        }
+        "command undo [<n>]":  XKey("c-u,%(n)d,c-slash"),
+        "command cast": XKey("m-x"),
+        "up case": XKey("a-c"),
+        "shank <text>": XText("%(text)s") + XKey("space"),
+        "<text>": XText("%(text)s") + XKey("space"),
+    }
     extras = [
-        IntegerRef("n", 1, 20),                
+        IntegerRef("n", 1, 20),
         Dictation("text"),
-        ]
+    ]
     defaults = {
         "n": 1,
-        }
+    }
+
 
 class EmacsMinibufRule(MappingRule):
     mapping = {
-        "complete" : XKey("w-m"),
-        }
-    
-#####################################
-# readline
-#####################################
+        "complete": XKey("w-m"),
+    }
 
-## readline grammar
+#
+# readline
+#
+
+# readline grammar
+
+
 class ReadLineRule(MappingRule):
     mapping = {
-        "up [<n>]" : XKey("up:%(n)d"),
-        "down [<n>]" : XKey("down:%(n)d"),
-        "left [<n>]" : XKey("left:%(n)d"),
-        "right [<n>]" : XKey("right:%(n)d"),
+        "up [<n>]": XKey("up:%(n)d"),
+        "down [<n>]": XKey("down:%(n)d"),
+        "left [<n>]": XKey("left:%(n)d"),
+        "right [<n>]": XKey("right:%(n)d"),
         "page [<n>]": XKey("pgdown:%(n)d"),
         "leaf [<n>]": XKey("pgup:%(n)d"),
-        "tab [<n>]" : XKey("tab:%(n)d"),
-        "top" : XKey("m-langle"),
-        "bottom" : XKey("m-rangle"),
-        "word [<n>]" :  XKey("a-f:%(n)d"),
-        "vow [<n>]" :  XKey("a-b:%(n)d"),
-        "del [<n>]" : XKey("del:%(n)d"),
+        "tab [<n>]": XKey("tab:%(n)d"),
+        "top": XKey("m-langle"),
+        "bottom": XKey("m-rangle"),
+        "word [<n>]":  XKey("a-f:%(n)d"),
+        "vow [<n>]":  XKey("a-b:%(n)d"),
+        "del [<n>]": XKey("del:%(n)d"),
         "rub [<n>]": XKey("backspace:%(n)d"),
         "kill": XKey("c-k"),
         "whack": XKey("c-u"),
@@ -755,15 +805,15 @@ class ReadLineRule(MappingRule):
         "pinch": XKey("m-w"),
         "swipe": XKey("c-space,c-e,m-w"),
         "lift": XKey("c-w"),
-        "quit": XKey("c-g"), 
-        "undo [<n>]" :  XKey("c-slash:%(n)d"),
-        "find" : XKey("c-s"),
-        "find <text>" : XKey("c-s") + XText("%(text)s"),
-        "scout" : XKey("c-r"),
-        "scout <text>" : XKey("c-r") + XText("%(text)s"),
-        "macro start" : XKey("c-x,lparen"),
-        "macro end" : XKey("c-x,rparen"),
-        "macro do" : XKey("c-x,e"),
+        "quit": XKey("c-g"),
+        "undo [<n>]":  XKey("c-slash:%(n)d"),
+        "find": XKey("c-s"),
+        "find <text>": XKey("c-s") + XText("%(text)s"),
+        "scout": XKey("c-r"),
+        "scout <text>": XKey("c-r") + XText("%(text)s"),
+        "macro start": XKey("c-x,lparen"),
+        "macro end": XKey("c-x,rparen"),
+        "macro do": XKey("c-x,e"),
         "get": XKey("a-slash"),
         "yes": XText("yes") + XKey("enter"),
         "no": XText("no") + XKey("enter"),
@@ -782,73 +832,74 @@ class ReadLineRule(MappingRule):
         "clear": XKey("c-l"),
         "log out": XKey("c-d"),
         "break": XKey("c-c"),
-        }
+    }
     extras = [
         IntegerRef("n", 1, 20),
         Dictation("text"),
-        ]
+    ]
     defaults = {
         "n": 1,
-        }
+    }
 
 
-#####################################
+#
 # bash
-#####################################
+#
 
 class BashRule(MappingRule):
     mapping = {
-        'seedy' : XText('cd'),
-        'seedy <dest> done' : XText('cd %(text)s') + XKey('enter'),
-        'pause' : XKey('c-z'),
-        'resume' : XText('fg'),
-        'resume done' : XText('fg') + XKey('enter'), 
-        'ground' : XText('bg'),
-        'ground done' : XText('bg') + XKey('enter'),
-        'help' : XText('help'),
-        'help done' : XText('help') + XKey('enter'),     
-        'list'  : XText('ls'),
-        'offer' : XKey('m-question'),
-        'give' : XKey('c-m-a'),
-        'dump' : XKey('m-star'),
-        'basket' : XKey('m-{'),
-        'variable' : XKey('m-$'),
-        'move' : XText('mv'),
-        'parent' : XText('../'),
-        'erase' : XText('rm'),
-        }
-    
-## construct one grammar to rule them all
+        'seedy': XText('cd'),
+        'seedy <dest> done': XText('cd %(text)s') + XKey('enter'),
+        'pause': XKey('c-z'),
+        'resume': XText('fg'),
+        'resume done': XText('fg') + XKey('enter'),
+        'ground': XText('bg'),
+        'ground done': XText('bg') + XKey('enter'),
+        'help': XText('help'),
+        'help done': XText('help') + XKey('enter'),
+        'list': XText('ls'),
+        'offer': XKey('m-question'),
+        'give': XKey('c-m-a'),
+        'dump': XKey('m-star'),
+        'basket': XKey('m-{'),
+        'variable': XKey('m-$'),
+        'move': XText('mv'),
+        'parent': XText('../'),
+        'erase': XText('rm'),
+    }
+
+# construct one grammar to rule them all
 xcon = XAppContext()
 grammar = Grammar("Damselfly")
-grammar.add_rule(ConnectRule())                     
+grammar.add_rule(ConnectRule())
 grammar.add_rule(DisconnectRule())
 grammar.add_rule(ResumeRule())
 grammar.add_rule(DNSOverride())
-grammar.add_rule(WMRule(context = xcon))
+grammar.add_rule(WMRule(context=xcon))
 
-## charkey grammar
-charContext = XAppContext("(emacs:(?![^:].*:Text)|xterm)", usereg = True)
-grammar.add_rule(CharkeyRule(context = charContext))
+# charkey grammar
+charContext = XAppContext("(emacs:(?![^:].*:Text)|xterm)", usereg=True)
+grammar.add_rule(CharkeyRule(context=charContext))
 
-## emacs grammar
-emacsContext = XAppContext('emacs:(?![^:].*:Text)', usereg = True)
+# emacs grammar
+emacsContext = XAppContext('emacs:(?![^:].*:Text)', usereg=True)
 grammar.add_rule(EmacsEditRule(context=emacsContext))
-grammar.add_rule(BringEmacsRule(context = xcon))
+grammar.add_rule(BringEmacsRule(context=xcon))
 
-emacsDictContext = XAppContext('emacs:[^:].*:Text', usereg = True)
-grammar.add_rule(EmacsDictRule(context = emacsDictContext))
+emacsDictContext = XAppContext('emacs:(?![^:].*:Text)', usereg=True)
+grammar.add_rule(EmacsDictRule(context=emacsDictContext))
 
-emacsMinibufContext = XAppContext('emacs: \*Minibuf-[0-9]+\*:', usereg = True)
-grammar.add_rule(EmacsMinibufRule(context = emacsMinibufContext))
+emacsMinibufContext = XAppContext('emacs: \*Minibuf-[0-9]+\*:', usereg=True)
+grammar.add_rule(EmacsMinibufRule(context=emacsMinibufContext))
 
-## readline grammar
+# readline grammar
 rlContext = XAppContext("xterm")
-grammar.add_rule(ReadLineRule(context = rlContext))
+grammar.add_rule(ReadLineRule(context=rlContext))
 
-## bash grammar
-##rlContext = XAppContext("xterm")
-##grammar.add_rule(BashRule(context = rlContext))
+# bash grammar
+# rlContext = XAppContext("xterm")
+# grammar.add_rule(BashRule(context = rlContext))
+
 
 def unload():
     global xcon, charContext, emacsContext, emacsDictContext
@@ -856,7 +907,7 @@ def unload():
 
     disconnect()
 
-    ## does this suffice?
+    # does this suffice?
     xcon = None
     charContext = None
 
@@ -867,9 +918,9 @@ def unload():
     rlContext = None
 
     windowCache = None
-    
+
     if grammar.loaded:
         grammar.unload()
 
 
-grammar.load()                                   
+grammar.load()
