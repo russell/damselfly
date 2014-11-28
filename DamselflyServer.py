@@ -23,11 +23,29 @@ import subprocess
 import re
 import time
 import signal
+import logging
 
-myName = 'DamselflyServer'
-myVersion = '2013-09-30'
-myID = myName + ' v. ' + myVersion
-print myID
+__version__ = '2013-09-30'
+__identifier__ = 'DamselflyServer v. ' + __version__
+
+try:
+    # Will fail if logging_enabled isn't defined
+    if logging_enabled:
+        pass
+except:
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    root.addHandler(ch)
+    logging_enabled = True
+
+LOG = logging.getLogger('DamselflyServer')
+
+LOG.info(__identifier__)
 
 # load config
 config = ConfigParser.SafeConfigParser()
@@ -104,42 +122,38 @@ def connect():
 
             os.mkfifo(serverIn)
 
-            print 'Attempting to open output fifo to client (could block) ... ',
-            sys.stdout.flush()
-
+            LOG.info('Opening output FIFO to client (could block).')
             fpO = open(serverOut, 'w')
-            print 'Success'
+            LOG.info('Opened output FIFO.')
 
-            print 'Attempting to open input fifo from client (could block)... ',
-            sys.stdout.flush()
-
+            LOG.info('Opening input fifo from client (could block).')
             fpI = open(serverIn, 'rU')
-            print 'Success'
+            LOG.info('Opened output FIFO.')
 
             connected = True
             stopped = False
 
-            print 'Waiting for greeting (could block)... ',
+            LOG.info('Waiting for greeting (could block)... ')
             greeting = fpI.readline()
-            print 'Success, greeting :', greeting
+            LOG.info('Success, greeting :'), greeting
 
-            print 'Sending response (could block)... ',
-            fpO.write(myID + '\n')
+            LOG.info('Sending response (could block)...')
+            fpO.write(__identifier__ + '\n')
             fpO.flush()
-            print 'Success'
+            LOG.info('Response sent.')
 
-            print 'Registering input fifo for level polling ... ',
+            LOG.info('Registering input FIFO for level polling ...')
             ep.register(
                 fpI, select.EPOLLIN | select.EPOLLERR | select.EPOLLHUP)
-            print 'Success'
+            LOG.info('FIFO Registered.')
 
-            print 'Polling connection ... ',
+            LOG.info('Polling connection...')
             polo()
         except KeyboardInterrupt:
             print 'Caught keyboard interrupt, exiting'
             done = True
-        except IOError as e:
-            print str(e)
+        except IOError:
+            LOG.exception("Error connecting.")
             done = True
         finally:
             disconnect()
@@ -148,30 +162,25 @@ def connect():
 def disconnect():
     global fpO, fpI, connected, stopped
 
-    try:
-        if fpO is not None:
-            fpO.close()
-            fpO = None
+    if fpO is not None:
+        fpO.close()
+        fpO = None
 
-        if fpI is not None:
-            ep.unregister(fpI)
-            fpI.close()
-            fpI = None
+    if fpI is not None:
+        ep.unregister(fpI)
+        fpI.close()
+        fpI = None
 
-        connected = False
-        stopped = True
-        print 'Disconnected'
+    connected = False
+    stopped = True
+    LOG.info('Disconnected')
 
-        print 'Removing FIFOs ... ',
-        if os.path.exists(serverOut):
-            os.remove(serverOut)
+    LOG.info('Removing FIFOs...')
+    if os.path.exists(serverOut):
+        os.remove(serverOut)
 
-        if os.path.exists(serverIn):
-            os.remove(serverIn)
-        print 'Done'
-    except:
-        print 'Unknown error in', sys._getframe().f_code.co_name, ', exiting: ', sys.exc_info()[0]
-        raise
+    if os.path.exists(serverIn):
+        os.remove(serverIn)
 
 
 def polo():
@@ -183,7 +192,7 @@ def polo():
             elif iev[0][1] & select.EPOLLERR:
                 raise IOError("Unknown fifo error occurred")
             elif iev[0][1] & select.EPOLLHUP:
-                print "hangup event, stopping polling"
+                LOG.info("hangup event, stopping polling")
                 break
             else:
                 raise Exception("unknown event")
@@ -833,7 +842,7 @@ def sendXInput(name):
 def doResume(name):
     global stopped
     stopped = False
-    print 'Resumed.'
+    LOG.info('Resumed.')
     fpO.write('Success\n')
     fpO.flush()
 
