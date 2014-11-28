@@ -196,39 +196,36 @@ class XAppContext(Context):
             str(wmclass) + ", " + "id: " + str(wid)
 
     def matches(self, executable, title, handle):
-        if connected:
-            if self.emptyCtx:
-                return True
-            else:
-#                if (executable != '') or (title != '') or (handle != 0):
-#                    return False
-
-                iMatch = True
-
-                try:
-                    ctx = getXCtx()
-                except CommandFailure:
-                    resumeServer()
-                    return False
-                except ConnectionDropped:
-                    return False
-
-                if self.either:
-                    iMatch &= self.myCmp(
-                        self.wmname, ctx[0]) | self.myCmp(self.wmclass, ctx[1])
-                else:
-                    if self.wmname:
-                        iMatch &= self.myCmp(self.wmname, ctx[0])
-
-                    if self.wmclass:
-                        iMatch &= self.myCmp(self.wmclass, ctx[1])
-
-                if self.wid:
-                    iMatch &= (ctx[2] == self.wid)
-
-                return iMatch
-        else:
+        if not connected:
             return False
+
+        if self.emptyCtx:
+            return True
+
+        iMatch = True
+
+        try:
+            ctx = getXCtx()
+        except CommandFailure:
+            resumeServer()
+            return False
+        except ConnectionDropped:
+            return False
+
+        if self.either:
+            iMatch &= self.myCmp(
+                self.wmname, ctx[0]) | self.myCmp(self.wmclass, ctx[1])
+        else:
+            if self.wmname:
+                iMatch &= self.myCmp(self.wmname, ctx[0])
+
+            if self.wmclass:
+                iMatch &= self.myCmp(self.wmclass, ctx[1])
+
+        if self.wid:
+            iMatch &= (ctx[2] == self.wid)
+
+        return iMatch
 
 # custom actions: prepare for the babbyscape
 
