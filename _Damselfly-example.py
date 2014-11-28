@@ -15,6 +15,7 @@
 
 import natlinkstatus
 
+import logging
 import sys
 import re
 
@@ -23,10 +24,27 @@ from dragonfly import (Grammar, Rule, MappingRule, CompoundRule,
 
 from dragonfly.actions.action_base import DynStrActionBase
 
-myName = 'Damselfly'
-myVersion = '2013-09-30'
-myID = myName + ' v. ' + myVersion
-print myID
+__version__ = '2013-09-30'
+__identifier__ = __name__ + ' v. ' + __version__
+
+try:
+    # Will fail if logging_enabled isn't defined
+    if logging_enabled:
+        pass
+except:
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    root.addHandler(ch)
+    logging_enabled = True
+
+LOG = logging.getLogger(__name__)
+
+LOG.info(__identifier__)
 
 # need to figure out where natlink resides
 status = natlinkstatus.NatlinkStatus()
@@ -69,33 +87,34 @@ def connect():
 
     if not connected:
         try:
-            print 'Attempting to open input fifo from server (could block)... ',
+            LOG.info('Opening input FIFO from server (could block).')
             sys.stdout.flush()
 
             fpI = open(serverOut, 'rU')
-            print 'Success'
+            LOG.info('input FIFO opened.')
 
-            print 'Attempting to open output fifo to server (could block)... ',
+            LOG.info('Opening output FIFO to server (could block).')
             sys.stdout.flush()
 
             fpO = open(serverIn, 'w')
-            print 'Success'
+            LOG.info('output FIFO opened.')
             connected = True
 
-            print 'Sending greeting (could block)... ',
-            fpO.write(myID + '\n')
+            LOG.info('Sending greeting (could block).'),
+            fpO.write(__identifier__ + '\n')
             fpO.flush()
-            print 'Success'
+            LOG.info('Greeting sent.')
 
-            print 'Waiting for response (could block)... ',
+            LOG.info('Waiting for response (could block).')
             response = fpI.readline()
-            print 'Success, response :', response
+            LOG.info('received response :%s' % response)
 
-        except IOError as ee:
-            print 'IOError: ', ee
+        except IOError:
+            LOG.exception()
             disconnect()
         except:
-            print 'Unknown error: ', sys.exc_info()[0]
+            LOG.exception()
+            LOG.error('Unknown error: ', sys.exc_info()[0])
             disconnect()
 
 
@@ -110,7 +129,7 @@ def disconnect():
         fpI.close()
         fpI = None
 
-    print 'Disconnected'
+    LOG.info('Disconnected')
 
     connected = False
 
@@ -125,8 +144,8 @@ def resumeServer():
 
             if res != 'Success':
                 raise CommandFailure(res)
-        except (CommandFailure, KeyboardInterrupt, IOError) as e:
-            print "caught exception:" + str(e) + 'aborting and disconnecting'
+        except (CommandFailure, KeyboardInterrupt, IOError):
+            LOG.exception()
             disconnect()
             raise ConnectionDropped()
 
@@ -134,22 +153,22 @@ def resumeServer():
 def getXCtx():
     if connected:
         try:
-            print 'Requesting X context... ',
+            LOG.info('Requesting X context.')
             fpO.write('getXCtx\n')
             fpO.flush()
-            print 'request sent'
+            LOG.info('request sent.')
 
             xctx = []
-            print 'waiting for response... ',
+            LOG.info('waiting for response.')
             xctx.append(fpI.readline().strip())
             if xctx[0].startswith('Failure'):
                 raise CommandFailure(xctx[0])
             xctx.append(fpI.readline().strip())
             xctx.append(int(fpI.readline().strip()))
-            print 'response received: ', xctx
+            LOG.info('response received: %s' % xctx)
             return xctx
-        except (KeyboardInterrupt, IOError) as e:
-            print "caught exception:" + str(e) + 'aborting and disconnecting'
+        except (KeyboardInterrupt, IOError):
+            LOG.exception()
             disconnect()
             raise ConnectionDropped()
 
@@ -227,31 +246,30 @@ class XAppContext(Context):
 
         return iMatch
 
-
 # custom actions: prepare for the babbyscape
 
 
 def dispatchAndHandle(mess):
     if connected:
         try:
-            print 'sending request'
+            LOG.info('sending request.')
             fpO.write(mess)
             fpO.flush()
-            print 'request sent'
-            print 'waiting for response... ',
+            LOG.info('request sent.')
+            LOG.info('waiting for response...')
             res = fpI.readline().strip()
-            print 'response received: ', res
+            LOG.info('response received: ', res)
 
             if res.startswith('Failure'):
                 raise CommandFailure(res)
             elif res != 'Success':
                 raise Exception(res)
 
-        except CommandFailure as e:
-            print 'Execution failed: ' + str(e)
+        except CommandFailure:
+            LOG.exception()
             return False
-        except (KeyboardInterrupt, IOError) as e:
-            print "Caught exception:" + str(e) + ': aborting and disconnecting'
+        except (KeyboardInterrupt, IOError):
+            LOG.exception()
             disconnect()
             raise ConnectionDropped()
     else:
@@ -338,7 +356,7 @@ class BringXApp(ActionBase):
     def __init__(self, execname, winname=None, timeout=5.0):
         ActionBase.__init__(self)
         self.execname = execname
-        if winname == None:
+        if winname is None:
             self.winname = execname
         else:
             self.winname = winname
@@ -429,7 +447,7 @@ class DoNothing(ActionBase):
         self.message = message
 
     def _execute(self, data=None):
-        print self.message
+        LOG.debug("DoNothing: %s" % self.message)
 
 # custom grammars
 
@@ -454,7 +472,7 @@ class ResumeRule(CompoundRule):
 
     def _process_recognition(self, node, extras):
         resumeServer()
-        print 'Resumed.'
+        LOG.info('Resumed.')
 
 # rudimentary wm control
 
