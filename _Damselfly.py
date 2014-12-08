@@ -1,4 +1,7 @@
-# Damselfly Copyright (C) 2013 Tristen Hayfield GNU GPL 3+
+# Damselfly
+#
+# Copyright (C) 2014 Russell Sim <russell.sim@gmail.com>
+# Copyright (C) 2013 Tristen Hayfield
 #
 # Damselfly is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,11 +16,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Damselfly.  If not, see <http://www.gnu.org/licenses/>.
 
-import natlinkstatus
-
 import logging
 import sys
 import re
+import socket
+import json
+import time
 
 from dragonfly import (Grammar, Rule, MappingRule, CompoundRule,
                        Dictation, IntegerRef, Context, ActionBase)
@@ -25,11 +29,18 @@ from dragonfly import (Grammar, Rule, MappingRule, CompoundRule,
 from dragonfly.actions.action_base import DynStrActionBase
 
 __version__ = '2013-09-30'
-__identifier__ = __name__ + ' v. ' + __version__
+__identifier__ = __name__[1:] + ' v. ' + __version__
+
 
 try:
-    # Will fail if logging_enabled isn't defined
-    if logging_enabled:
+    # try and unload if it's defined
+    grammar.unload()  # NOQA
+except:
+    pass
+
+try:
+    # Will fail if logging enabled isn't defined
+    if logging_enabled:  # NOQA
         pass
 except:
     root = logging.getLogger()
@@ -42,135 +53,119 @@ except:
     root.addHandler(ch)
     logging_enabled = True
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger(__name__[1:])
 
-LOG.info(__identifier__)
-
-# need to figure out where natlink resides
-status = natlinkstatus.NatlinkStatus()
-
-# fifos to SnapDragonServer
-
-# is this a reasonable way of divining the natlink path?
-natLinkPath = status.getCoreDirectory().rstrip('core')
-
-serverOut = natLinkPath + 'damselServerOut'
-serverIn = natLinkPath + 'damselServerIn'
+LOG.info("Loaded " + __identifier__)
 
 connected = False
-fpO = None
-fpI = None
-
 windowCache = {}
+HOST, PORT = "localhost", 8123
 
-
-class ConnectionDropped(Exception):
-
-    def __init__(self, value=None):
-        self.value = value
-
-    def __str__(self):
-        return repr(self.value)
-
-
-class CommandFailure(Exception):
-
-    def __init__(self, value):
-        self.value = value
-
-    def __str__(self):
-        return repr(self.value)
+# Create a socket (SOCK_STREAM means a TCP socket)
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 
 def connect():
-    global fpO, fpI, connected
+    global sock, connected
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        # Connect to server and send data
+        LOG.info('Opening connection to server.')
+        sock.connect((HOST, PORT))
+        connected = True
+        server_id = call("handshake", identity=__identifier__)
+        LOG.info('Connected. %s' % server_id)
+    except:
+        LOG.exception("Failed to connect.")
+        disconnect()
 
-    if not connected:
-        try:
-            LOG.info('Opening input FIFO from server (could block).')
-            sys.stdout.flush()
 
-            fpI = open(serverOut, 'rU')
-            LOG.info('input FIFO opened.')
+def sendMsg(**kwargs):
+    if connected is not True:
+        connect()
 
-            LOG.info('Opening output FIFO to server (could block).')
-            sys.stdout.flush()
+    try:
+        data = json.dumps(kwargs)
+        LOG.info("Sending %s" % data)
+        sock.sendall(data + "\r\n")
+    except:
+        LOG.exception("Failed to send.")
+        disconnect()
+        raise
 
-            fpO = open(serverIn, 'w')
-            LOG.info('output FIFO opened.')
-            connected = True
+buffer = ""
 
-            LOG.info('Sending greeting (could block).'),
-            fpO.write(__identifier__ + '\n')
-            fpO.flush()
-            LOG.info('Greeting sent.')
 
-            LOG.info('Waiting for response (could block).')
-            response = fpI.readline()
-            LOG.info('received response: %s' % response)
+def recvMsg():
+    global buffer
+    start = time.time()
+    # TODO needs to have a timeout
+    LOG.info('waiting for response.')
+    while True:
+        if connected is not True:
+            raise Exception("Trying to receive from disconnected socket.")
+        buffer = buffer + sock.recv(1024)
+        if buffer.find('\n') > -1:
+            messages = buffer.split('\n', 1)
+            if len(messages) > 1:
+                buffer = messages[1]
+            message = json.loads(messages[0])
+            if 'error' in message:
+                raise Exception(message['error'])
+            return message
+        if time.time() - start > 4:
+            raise Exception("Timed out waiting for response")
 
-        except IOError:
-            LOG.exception()
-            disconnect()
-        except:
-            LOG.exception()
-            LOG.error('Unknown error: ', sys.exc_info()[0])
-            disconnect()
+
+def call(command, **kwargs):
+    sendMsg(call=command, **kwargs)
+    return recvMsg()
+
+
+def cast(command, **kwargs):
+    sendMsg(cast=command, **kwargs)
 
 
 def disconnect():
-    global fpO, fpI, connected
+    global connected
 
-    if fpO is not None:
-        fpO.close()
-        fpO = None
-
-    if fpI is not None:
-        fpI.close()
-        fpI = None
-
+    sock.close()
     LOG.info('Disconnected')
 
     connected = False
 
 
-def resumeServer():
-    if connected:
-        try:
-            fpO.write('doResume\n')
-            fpO.flush()
+class cache(object):
+    """Cache With Timeout"""
+    _cache = None
+    _timeout = 0
+    timeout = None
 
-            res = fpI.readline().strip()
+    def __init__(self, timeout=1):
+        self.timeout = timeout
 
-            if res != 'Success':
-                raise CommandFailure(res)
-        except (CommandFailure, KeyboardInterrupt, IOError):
-            LOG.exception()
-            disconnect()
-            raise ConnectionDropped()
+    def __call__(self, f):
+        def func(*args, **kwargs):
+            if (time.time() - self._timeout) > self.timeout:
+                self._cache = f(*args, **kwargs)
+                self._timeout = time.time()
+            return self._cache
+        func.func_name = f.func_name
+
+        return func
 
 
+@cache(1)
 def getXCtx():
     if connected:
-        try:
-            LOG.info('Requesting X context.')
-            fpO.write('getXCtx\n')
-            fpO.flush()
-            LOG.info('request sent.')
-
-            xctx = []
-            LOG.info('waiting for response.')
-            xctx.append(fpI.readline().strip())
-            if xctx[0].startswith('Failure'):
-                raise CommandFailure(xctx[0])
-            xctx.append(fpI.readline().strip())
-            xctx.append(int(fpI.readline().strip()))
-            LOG.info('response received: %s' % xctx)
-            return xctx
-        except (KeyboardInterrupt, IOError):
-            LOG.exception()
-            disconnect()
-            raise ConnectionDropped()
+        LOG.info('Requesting X context.')
+        msg = call('getXCtx')
+        xctx = [msg.get('window_name', ''),
+                msg.get('window_class', ''),
+                msg.get('window_id', '')]
+        LOG.info('response received: %s' % xctx)
+        return xctx
 
 # custom contexts
 
@@ -223,13 +218,7 @@ class XAppContext(Context):
 
         iMatch = True
 
-        try:
-            ctx = getXCtx()
-        except CommandFailure:
-            resumeServer()
-            return False
-        except ConnectionDropped:
-            return False
+        ctx = getXCtx()
 
         if self.either:
             iMatch &= self.myCmp(
@@ -249,33 +238,6 @@ class XAppContext(Context):
 # custom actions: prepare for the babbyscape
 
 
-def dispatchAndHandle(mess):
-    if connected:
-        try:
-            LOG.info('sending request.')
-            fpO.write(mess)
-            fpO.flush()
-            LOG.info('request sent.')
-            LOG.info('waiting for response...')
-            res = fpI.readline().strip()
-            LOG.info('response received: ', res)
-
-            if res.startswith('Failure'):
-                raise CommandFailure(res)
-            elif res != 'Success':
-                raise Exception(res)
-
-        except CommandFailure:
-            LOG.exception()
-            return False
-        except (KeyboardInterrupt, IOError):
-            LOG.exception()
-            disconnect()
-            raise ConnectionDropped()
-    else:
-        return False
-
-
 class FocusXWindow(DynStrActionBase):
 
     def __init__(self, spec, search=None, static=False):
@@ -287,12 +249,12 @@ class FocusXWindow(DynStrActionBase):
 
     def _execute_events(self, events):
         if (self.search == 'any') and (self._pspec in windowCache):
-            mymess = 'focusXWindow\n' + 'id' + \
-                '\n' + windowCache[self._pspec] + '\n'
+            return cast('focusXWindowById',
+                        id=windowCache[self._pspec])
         else:
-            mymess = 'focusXWindow\n' + self.search + \
-                '\n' + str(self._pspec) + '\n'
-        return(dispatchAndHandle(mymess))
+            return cast('focusXWindow',
+                        mode=self.search,
+                        name=str(self._pspec))
 
     def _parse_spec(self, spec):
         self._pspec = spec
@@ -311,12 +273,11 @@ class HideXWindow(DynStrActionBase):
 
     def _execute_events(self, events):
         if (self.search == 'any') and (self._pspec in windowCache):
-            mymess = 'hideXWindow\n' + 'id' + \
-                '\n' + windowCache[self._pspec] + '\n'
+            return cast('hideXWindowById',
+                        id=windowCache[self._pspec])
         else:
-            mymess = 'hideXWindow\n' + self.search + \
-                '\n' + str(self._pspec) + '\n'
-        return(dispatchAndHandle(mymess))
+            return cast('hideXWindow',
+                        title=str(self._pspec))
 
     def _parse_spec(self, spec):
         self._pspec = spec
@@ -353,49 +314,47 @@ class CacheXWindow(DynStrActionBase):
 
 class BringXApp(ActionBase):
 
-    def __init__(self, execname, winname=None, timeout=5.0):
+    def __init__(self, *args, **kwargs):
         ActionBase.__init__(self)
-        self.execname = execname
-        if winname is None:
-            self.winname = execname
-        else:
-            self.winname = winname
-        self.timeout = timeout
+        self.args = args
+        self.kwargs = kwargs
 
     def _execute(self, data=None):
-        mymess = 'bringXApp\n' + self.winname + '\n' + self.execname + '\n'
-        mymess += str(self.timeout) + '\n'
-        return(dispatchAndHandle(mymess))
+        return cast('bringXApp',
+                    executable=self.args,
+                    **self.kwargs)
 
 
 class WaitXWindow(ActionBase):
 
-    def __init__(self, title, timeout=5.0):
+    def __init__(self, title, executable, timeout=5.0):
         ActionBase.__init__(self)
-        self.winname = title
+        self.title = title
+        self.executable = executable
         self.timeout = timeout
 
     def _execute(self, data=None):
-        mymess = 'waitXWindow\n' + self.title + '\n' + str(self.timeout) + '\n'
-        return(dispatchAndHandle(mymess))
+        return call('waitXWindow',
+                    title=self.title,
+                    executable=self.executable,
+                    timeout=self.timeout)
 
 
 class StartXApp(ActionBase):
 
-    def __init__(self, execname):
+    def __init__(self, *args, **kwargs):
         ActionBase.__init__(self)
-        self.execname = execname
+        self.args = args
+        self.kwargs = kwargs
 
     def _execute(self, data=None):
-        mymess = 'startXApp\n' + self.execname + '\n'
-        return(dispatchAndHandle(mymess))
+        return cast('startXApp', executable=self.args, **self.kwargs)
 
 
 class XKey(DynStrActionBase):
 
     def _execute_events(self, events):
-        mymess = 'sendXKeys\n' + self._pspec + '\n'
-        return(dispatchAndHandle(mymess))
+        return cast('sendXKeys', keys=self._pspec)
 
     def _parse_spec(self, spec):
         self._pspec = spec
@@ -405,23 +364,23 @@ class XKey(DynStrActionBase):
 class XMouse(DynStrActionBase):
 
     def _execute_events(self, events):
-        mymess = 'sendXMouse\n' + self._pspec + '\n'
-        return(dispatchAndHandle(mymess))
+        return cast('sendXMouse', moves=self._pspec)
 
     def _parse_spec(self, spec):
         self._pspec = spec
         return self
 
-# neither autoformat nor pause are considered atm
-
 
 class XText(DynStrActionBase):
 
-    def __init__(self, spec, static=False, space=True, title=False, upper=False):
+    def __init__(self, spec, static=False, space=True,
+                 title=False, upper=False, lower=False, camel=False):
         DynStrActionBase.__init__(self, spec=str(spec), static=static)
         self.space = space
         self.title = title
         self.upper = upper
+        self.lower = lower
+        self.camel = camel
 
     def _parse_spec(self, spec):
         self._pspec = spec
@@ -429,19 +388,26 @@ class XText(DynStrActionBase):
 
     def _execute_events(self, events):
         tspec = self._pspec
-        if self.title:
+        if self.lower:
+            tspec = tspec.lower()
+        elif self.title:
             tspec = tspec.title()
         elif self.upper:
             tspec = tspec.upper()
+        elif self.camel:
+            tspec = tspec.title()
+            tspec = tspec[:1].lower() + tspec[1:]
 
-        if not self.space:
+        if self.space is False:
             tspec = tspec.replace(' ', '')
+        elif self.space is not True:
+            tspec = tspec.replace(' ', self.space)
 
-        mymess = 'sendXText\n' + tspec + '\n'
-        return(dispatchAndHandle(mymess))
+        return cast('sendXText', text=tspec)
 
 
 class DoNothing(ActionBase):
+    _str = "DoNothing"
 
     def __init__(self, message='Recognition event consumed.'):
         self.message = message
@@ -449,10 +415,123 @@ class DoNothing(ActionBase):
     def _execute(self, data=None):
         LOG.debug("DoNothing: %s" % self.message)
 
-# custom grammars
+
+#
+# Emacs
+#
+
+class EmacsEval(ActionBase):
+
+    def __init__(self, lisp=""):
+        super(EmacsEval, self).__init__()
+        self.lisp = lisp
+
+    def _execute(self, data=None):
+        return cast('sendEmacs', lisp=self.lisp % data)
 
 
-# rules
+class EmacsICmd(EmacsEval):
+
+    def __init__(self, command="", prefix=False):
+        super(EmacsICmd, self).__init__("(call-interactively '%s)" % command)
+        self.prefix = False
+
+    def _execute(self, data=None):
+        lisp = self.lisp
+        args = ""
+        if self.prefix is True and 'n' in data:
+            args = "(setq current-prefix-arg '(%s))" % data['n']
+        lisp = "(progn %s %s (undo-boundary))" % (args, self.lisp)
+        return cast('sendEmacs', lisp=lisp % data)
+
+
+class EmacsIKey(DynStrActionBase):
+
+    def __init__(self, spec, static=False):
+        super(EmacsIKey, self).__init__(str(spec), static)
+
+    def _parse_spec(self, spec):
+        self._pspec = spec
+        return self
+
+    def _execute_events(self, events):
+        lisp = ("(progn"
+                " (execute-kbd-macro (read-kbd-macro \"%s\"))"
+                " (undo-boundary))" % (self._pspec))
+        return cast('sendEmacs', lisp=lisp)
+
+
+class EmacsIText(EmacsIKey):
+
+    def __init__(self, spec, static=False, space=True,
+                 title=False, upper=False, lower=False, camel=False):
+        super(EmacsIText, self).__init__(spec, static)
+        self.space = space
+        self.title = title
+        self.upper = upper
+        self.lower = lower
+        self.camel = camel
+
+    def _execute_events(self, events):
+        tspec = self._pspec
+        if self.lower:
+            tspec = tspec.lower()
+        elif self.title:
+            tspec = tspec.title()
+        elif self.upper:
+            tspec = tspec.upper()
+        elif self.camel:
+            tspec = tspec.title()
+            tspec = tspec[:1].lower() + tspec[1:]
+
+        if self.space is False:
+            tspec = tspec.replace(' ', '')
+        elif self.space is not True:
+            tspec = tspec.replace(' ', self.space)
+
+        lisp = ("(progn"
+                " (execute-kbd-macro \"%s\")"
+                " (undo-boundary))" % tspec)
+        return cast('sendEmacs', lisp=lisp)
+
+
+class EmacsIProgn(EmacsEval):
+    def __init__(self, forms=""):
+        super(EmacsIProgn, self).__init__(
+            "(call-interactively '(lambda () (interactive) %s))" % forms)
+
+
+class EmacsContext(XAppContext):
+
+    def __init__(self, wmname=None, wmclass=None, wid=None,
+                 usereg=False, major_mode=''):
+        super(EmacsContext, self).__init__(wmname=wmname, wmclass=wmclass,
+                                           wid=wid, usereg=usereg)
+        self.usereg = usereg
+        if usereg:
+            self.major_mode = re.compile(major_mode)
+        else:
+            self.major_mode = major_mode
+
+    def matches(self, executable, title, handle):
+        if not super(EmacsContext, self).matches(executable, title, handle):
+            return False
+        major_mode = call('sendEmacs', lisp='major-mode')['major_mode']
+        LOG.info('Emacs context: %s' % major_mode)
+        if self.usereg:
+            if self.major_mode.search(major_mode) is None:
+                return False
+        else:
+            if self.major_mode != major_mode:
+                return False
+
+        return True
+
+
+#
+# Custom grammars
+#
+
 class ConnectRule(CompoundRule):
     spec = "damselfly connect"
 
@@ -467,15 +546,13 @@ class DisconnectRule(CompoundRule):
         disconnect()
 
 
-class ResumeRule(CompoundRule):
-    spec = "damselfly resume"
 
     def _process_recognition(self, node, extras):
-        resumeServer()
-        LOG.info('Resumed.')
 
-# rudimentary wm control
 
+#
+# WM control
+#
 
 class WMRule(MappingRule):
     mapping = {
@@ -514,7 +591,6 @@ xcon = XAppContext()
 grammar = Grammar("Damselfly")
 grammar.add_rule(ConnectRule())
 grammar.add_rule(DisconnectRule())
-grammar.add_rule(ResumeRule())
 grammar.add_rule(DNSOverride())
 grammar.add_rule(WMRule(context=xcon))
 

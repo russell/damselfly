@@ -1,6 +1,9 @@
 #!/usr/bin/python
 
-# Damselfly Copyright (C) 2013 Tristen Hayfield GNU GPL 3+
+# Damselfly
+#
+# Copyright (c) 2014 Russell Sim <russell.sim@gmail.com.au>
+# Copyright (c) 2013 Tristen Hayfield
 #
 # Damselfly is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,17 +19,40 @@
 # along with Damselfly.  If not, see <http://www.gnu.org/licenses/>.
 
 import ConfigParser
-import os
-import select
-import sys
-import subprocess
-import re
-import time
-import signal
+import json
 import logging
+import os
+import re
+import subprocess
+import sys
+import time
+
+import psutil
+import ewmh
+import Xlib.Xutil
+import Xlib.Xatom
+from twisted.internet import protocol, reactor, utils
+from twisted.protocols.basic import LineReceiver
+
 
 __version__ = '2013-09-30'
 __identifier__ = 'DamselflyServer v. ' + __version__
+
+# load config
+config = ConfigParser.SafeConfigParser()
+
+if config.read(os.path.expanduser('~/.damselfly.cfg')) == []:
+    raise Exception("Failed to find or parse config file: " + os.path.expanduser(
+        '~/.damselfly.cfg') + "\nPlease add a config file and restart the server.")
+
+log_level = config.get("logging", "level").lower()
+
+loglevels = {'debug': logging.DEBUG,
+             'info': logging.INFO,
+             'warning': logging.WARNING,
+             'error': logging.ERROR}
+
+assert log_level in loglevels, "%s no in %s" % (log_level, loglevels.keys())
 
 try:
     # Will fail if logging_enabled isn't defined
@@ -34,10 +60,10 @@ try:
         pass
 except:
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    root.setLevel(loglevels[log_level])
 
     ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
+    ch.setLevel(loglevels[log_level])
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     root.addHandler(ch)
@@ -47,32 +73,8 @@ LOG = logging.getLogger('DamselflyServer')
 
 LOG.info(__identifier__)
 
-# load config
-config = ConfigParser.SafeConfigParser()
-
-if config.read(os.path.expanduser('~/.damselfly.cfg')) == []:
-    raise Exception("Failed to find or parse config file: " + os.path.expanduser(
-        '~/.damselfly.cfg') + "\nPlease add a config file and restart the server.")
-
-# paths for sweet fifo action
-
-natLinkPath = config.get("paths", "natLinkPath")
-
-serverOut = natLinkPath + '/damselServerOut'
-serverIn = natLinkPath + '/damselServerIn'
-
 done = False
 connected = False
-stopped = False
-
-fpO = None
-fpI = None
-ep = select.epoll()
-
-# precompiled regular expressions for use by various command handlers
-prewmc = re.compile(
-    r'^WM_CLASS\(STRING\) = "([A-Za-z0-9._]*)", "([A-Za-z0-9._]*)"$', re.M)
-prewmnm = re.compile(r'^WM_NAME\(STRING\) = "(.*)"$', re.M)
 
 # here there be dragons: re's for parsing key commands
 prekey = re.compile(
@@ -88,167 +90,6 @@ premousepress = re.compile(
 premousehr = re.compile(
     "^ *(left|middle|wheel (?:up|down)|right):(hold|release)(?:/([0-9]+))? *$")
 premousesep = re.compile(" *,(?![- .0-9]*[])>])")
-
-# for finding clients of a root window
-prerwc = re.compile(
-    r'^_NET_CLIENT_LIST\(WINDOW\): window id # ((?:0x[0-9a-f]+(?:, )?)+)$', re.M)
-prexpwa = re.compile(r'^\(XGetWindowProperty\[[A-Z_]+\] failed .*$', re.M)
-
-# getting geometry from xwininfo
-prewh = re.compile(r'^  Height: ([0-9]+)$', re.M)
-preww = re.compile(r'^  Width: ([0-9]+)$', re.M)
-
-
-def sighangup(signum, frame):
-    global done
-    disconnect()
-    done = True
-
-signal.signal(signal.SIGHUP, sighangup)
-
-
-def connect():
-    global fpO, fpI, connected, ep, done, stopped
-
-    if not connected:
-        try:
-            if os.path.exists(serverOut):
-                os.remove(serverOut)
-
-            os.mkfifo(serverOut)
-
-            if os.path.exists(serverIn):
-                os.remove(serverIn)
-
-            os.mkfifo(serverIn)
-
-            LOG.info('Opening output FIFO to client (could block).')
-            fpO = open(serverOut, 'w')
-            LOG.info('Opened output FIFO.')
-
-            LOG.info('Opening input fifo from client (could block).')
-            fpI = open(serverIn, 'rU')
-            LOG.info('Opened output FIFO.')
-
-            connected = True
-            stopped = False
-
-            LOG.info('Waiting for greeting (could block)... ')
-            greeting = fpI.readline()
-            LOG.info('Success, greeting :'), greeting
-
-            LOG.info('Sending response (could block)...')
-            fpO.write(__identifier__ + '\n')
-            fpO.flush()
-            LOG.info('Response sent.')
-
-            LOG.info('Registering input FIFO for level polling ...')
-            ep.register(
-                fpI, select.EPOLLIN | select.EPOLLERR | select.EPOLLHUP)
-            LOG.info('FIFO Registered.')
-
-            LOG.info('Polling connection...')
-            polo()
-        except KeyboardInterrupt:
-            print 'Caught keyboard interrupt, exiting'
-            done = True
-        except IOError:
-            LOG.exception("Error connecting.")
-            done = True
-        finally:
-            disconnect()
-
-
-def disconnect():
-    global fpO, fpI, connected, stopped
-
-    if fpO is not None:
-        fpO.close()
-        fpO = None
-
-    if fpI is not None:
-        ep.unregister(fpI)
-        fpI.close()
-        fpI = None
-
-    connected = False
-    stopped = True
-    LOG.info('Disconnected')
-
-    LOG.info('Removing FIFOs...')
-    if os.path.exists(serverOut):
-        os.remove(serverOut)
-
-    if os.path.exists(serverIn):
-        os.remove(serverIn)
-
-
-def polo():
-    while True:
-        iev = ep.poll(1.0)
-        if len(iev) != 0:
-            if iev[0][1] & select.EPOLLIN:
-                inputHandler()
-            elif iev[0][1] & select.EPOLLERR:
-                raise IOError("Unknown fifo error occurred")
-            elif iev[0][1] & select.EPOLLHUP:
-                LOG.info("hangup event, stopping polling")
-                break
-            else:
-                raise Exception("unknown event")
-
-
-def inputHandler():
-    imess = fpI.readline().strip()
-    fdic.get(imess, Exception)(imess)
-
-
-def doCmdOutputWithRetries(cmd, maxTries=3, dt=0.01):
-    cmdSucceeded = False
-    nt = 0
-    while (not cmdSucceeded) and (nt < maxTries):
-        try:
-            nt += 1
-# print 'attempt #', nt
-            xp = subprocess.check_output(cmd, stderr=open(os.devnull, 'w'))
-            cmdSucceeded = True
-        except subprocess.CalledProcessError as e:
-            cmderr = e
-            time.sleep(dt)
-    if cmdSucceeded:
-        return xp
-    else:
-        raise cmderr
-
-
-def getXCtx(name):
-    try:
-        wid = int(doCmdOutputWithRetries(
-            ["xdotool", "getactivewindow"], 1).strip())
-        xp = doCmdOutputWithRetries(["xprop", "-id", str(wid)], 1)
-
-        wmc = prewmc.search(xp)
-        wmnm = prewmnm.search(xp)
-        if wmc:
-            wmc = wmc.groups()[0] + ' ' + wmc.groups()[1]
-        else:
-            wmc = ''
-
-        if wmnm:
-            wmnm = wmnm.groups()[0]
-        else:
-            wmnm = ''
-
-        fpO.write(wmnm + '\n')
-        fpO.write(wmc + '\n')
-        fpO.write(str(wid) + '\n')
-        fpO.flush()
-    except subprocess.CalledProcessError as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
 
 
 #--clearmodifiers
@@ -683,7 +524,7 @@ def parseKey2xdotool(kexp):
 # PARSES A SINGLE mouse command
 
 
-def parseMouse2xdotool(kexp):
+def parseMouse2xdotool(wm, kexp):
     babby = premousemove.match(kexp)
     cmd = []
     op = None
@@ -716,7 +557,7 @@ def parseMouse2xdotool(kexp):
         iy = bg[ic + 1].isdigit()
 
         if not (ix and iy):
-            wh = getWindowSize(mref)
+            wh = window_size(wm, mref)
 
         # test for integer coords
         if bg[ic].find('.') == -1:
@@ -777,345 +618,237 @@ def parseMouse2xdotool(kexp):
     return [cmd, op]
 
 
-def sendXText(name):
-    global stopped
-    try:
-        istr = fpI.readline().strip()
-        if not stopped:
-            cmd = ["xdotool", "key", "-clearmodifiers"]
-            res = parseStr2xdotool(istr)
-            if res:
-                cmd.extend(res)
-                xp = subprocess.check_call(cmd)
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-
-    except (subprocess.CalledProcessError, ParseFailure) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
-
-
-def sendXInput(name):
-    global stopped
-    try:
-        lstr = fpI.readline().strip()
-        if not stopped:
-            if name == "sendXKeys":
-                lstr = lstr.split(',')
-            elif name == "sendXMouse":
-                lstr = premousesep.split(lstr)
-
-            for istr in lstr:
-                cmd = ["xdotool"]
-                if name == "sendXKeys":
-                    tcmd = parseKey2xdotool(istr)
-                elif name == "sendXMouse":
-                    tcmd = parseMouse2xdotool(istr)
-
-                cmd.extend(tcmd[0])
-                xp = subprocess.check_call(cmd)
-
-                if tcmd[1]:
-                    time.sleep(tcmd[1])
-
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except (subprocess.CalledProcessError, ParseFailure) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
-
-
-def doResume(name):
-    global stopped
-    stopped = False
-    LOG.info('Resumed.')
-    fpO.write('Success\n')
-    fpO.flush()
-
-
-def getWindowSize(id="root"):
+def window_size(wm, id="root"):
     if id == "root":
-        wid = int(doCmdOutputWithRetries(
-            ['xdotool', 'search', '--limit', '1', '--maxdepth', '0', '']).strip())
+        return list(wm.getDesktopGeometry())
     elif id == "active":
-        wid = int(doCmdOutputWithRetries(['xdotool', 'getactivewindow']))
+        window = wm.getActiveWindow()
     else:
-        wid = int(id)
-    xp = doCmdOutputWithRetries(['xwininfo', '-id', str(wid)])
-    width = int(preww.search(xp).groups()[0])
-    height = int(prewh.search(xp).groups()[0])
-    return [width, height]
+        window = self.wm.display.create_resource_object('window',
+                                                        int(value))
+    data = window.get_geometry()._data
+    return [data['width'], data['height']]
 
 
-def findRootWindowClients(tids):
-    try:
-        wid = int(doCmdOutputWithRetries(
-            ['xdotool', 'search', '--limit', '1', '--maxdepth', '0', '']).strip())
-
-        xp = doCmdOutputWithRetries(['xprop', '-id', str(wid)])
-
-#        print 'wid',str(wid)
-        babby = prerwc.search(xp)
-        if babby:
-            ids = frozenset(
-                map(lambda x: int(x, base=16), babby.groups()[0].split(', ')))
-#            print 'ids:',ids
-
-            return list(ids & tids)
-        else:
-            return []
-    except subprocess.CalledProcessError:
-        return []
+def window_executable(wm, window):
+    pid = window.get_full_property(wm.display.intern_atom('_NET_WM_PID'),
+                                   Xlib.Xatom.CARDINAL).value[0]
+    process = psutil.Process(pid)
+    return process.cmdline()
 
 
-def getWindowArgs(mode, value):
-    if mode == 'id':
-        return int(value)
-    elif mode == 'any':
-        xp = doCmdOutputWithRetries(['xdotool', 'search', value]).split()
-    elif mode in ('name', 'class'):
-        xp = doCmdOutputWithRetries(
-            ['xdotool', 'search', '--' + mode, value]).split()
-    else:
-        raise InvalidArgs('Invalid argument to focusWindow: ' + tp)
+class LoggingProcessProtocol(protocol.ProcessProtocol):
+    def __init__(self, name):
+        self.name = name
+        self.data = ""
 
-    tids = frozenset(map(int, xp))
-    ids = findRootWindowClients(tids)
+    def connectionMade(self):
+        LOG.info("%s: Started..." % self.name)
 
-    if len(ids) > 0:
-        return(ids[0])
-    else:
-        raise WindowNotFound('Could not find window: ' + value)
+    def outReceived(self, data):
+        for line in data.split("\n"):
+            LOG.info("%s: %s" % (self.name, data))
 
+    def errReceived(self, data):
+        LOG.info(data)
 
-def focusWindowArgs(mode, value):
-    if mode == 'id':
-        cmd = ['xdotool', 'windowactivate', '--sync', str(value)]
-    elif mode == 'any':
-        xp = doCmdOutputWithRetries(['xdotool', 'search', value]).split()
-        tids = frozenset(map(int, xp))
-#        print 'tids:', tids
-        ids = findRootWindowClients(tids)
-        if len(ids) > 0:
-            cmd = ['xdotool', 'windowactivate', '--sync', str(ids[0])]
-        else:
-            raise WindowNotFound('Could not find activatable window: ' + value)
-    elif mode in ('name', 'class'):
-        xp = doCmdOutputWithRetries(
-            ['xdotool', 'search', '--' + mode, value]).split()
-        tids = frozenset(map(int, xp))
+    def processExited(self, reason):
+        LOG.info("%s: processExited, status %d"
+                 % (self.name, reason.value.exitCode))
 
-        ids = findRootWindowClients(tids)
-        if len(ids) > 0:
-            cmd = ['xdotool', 'windowactivate', '--sync', str(ids[0])]
-        else:
-            raise WindowNotFound('Could not find activatable window: ' + value)
-    else:
-        raise InvalidArgs('Invalid argument to focusWindow: ' + tp)
-
-    # this command will either fail with an error, complete almost immediately (success), or complete after a short pause and complain to stderr (fail)
-#    print cmd
-    xp = subprocess.check_output(cmd)
-    babby = prexpwa.search(xp)
-
-    if babby:
-        raise WindowNotFound('Could not activate window: ' + value)
+    def processEnded(self, reason):
+        LOG.info("%s: processEnded, status %d"
+                 % (self.name, reason.value.exitCode))
 
 
-def focusXWindow(name):
-    global stopped
-    try:
-        tp = fpI.readline().strip()
-        val = fpI.readline().strip()
+class DamselflyServer(LineReceiver):
 
-        if not stopped:
-            print 'focuswindow:', tp, val
-            focusWindowArgs(tp, val)
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except (subprocess.CalledProcessError, InvalidArgs, WindowNotFound) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
+    stop_processing = True
 
+    def __init__(self):
+        self.wm = ewmh.EWMH()
 
-def hideXWindow(name):
-    global stopped
-    try:
-        tp = fpI.readline().strip()
-        val = fpI.readline().strip()
+    def sendMsg(self, **kwargs):
+        self.sendLine(json.dumps(kwargs))
 
-        if not stopped:
-            print 'hideXWindow:', tp, val
-            if val != 'None':
-                res = getWindowArgs(tp, val)
-                xp = doCmdOutputWithRetries(
-                    ['xdotool', 'windowminimize', '--sync', str(res)])
-            else:
-                xp = doCmdOutputWithRetries(
-                    ['xdotool', 'getactivewindow', 'windowminimize', '--sync'])
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except (subprocess.CalledProcessError, InvalidArgs, WindowNotFound) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
+    def connectionMade(self):
+        self.handle_cast_sendNotification("Damselfly connected")
+        LOG.info("Connection made.")
 
-# at the moment we support a limited version of this call, with no args
-# supplied
+    def connectionLost(self, reason):
+        self.handle_cast_sendNotification("Damselfly connection lost")
+        LOG.info("Connection lost.")
 
+    def lineReceived(self, line):
+        message = json.loads(line)
 
-def startXApp(name):
-    global stopped
-    try:
-        appname = fpI.readline().strip()
-        if not stopped:
-            sp = subprocess.Popen([appname])
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except OSError as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
-
-
-def waitXWindow(name):
-    global stopped
-    try:
-        winname = fpI.readline().strip()
-        timeout = float(fpI.readline().strip())
-        if not stopped:
-            xp = doCmdOutputWithRetries(['xdotool', 'search', winname]).split()
-            tids = frozenset(map(int, xp))
-            ids = findRootWindowClients(tids)
-            if len(ids) > 0:
-                cmd = ['xdotool', 'behave', str(
-                    ids[0]), 'focus', 'exec', 'echo', 'focus']
-            else:
-                raise WindowNotFound(
-                    'Could not find activatable window: ' + value)
-
-            sp = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=open(os.devnull, 'w'))
-            tep = select.epoll()
-            tep.register(
-                sp.stdout, select.EPOLLIN | select.EPOLLERR | select.EPOLLHUP)
-            iev = tep.poll(timeout)
-            exp = None
-            if len(iev) != 0:
-                if iev[0][1] & select.EPOLLIN:
-                    xp = sp.stdout.readline().strip()
-                    if xp != 'focus':
-                        exp = Exception(
-                            "unexpected message while waiting for window: " + xp)
-                else:
-                    exp = Exception(
-                        "unknown exception occurred while waiting for window")
-            else:
-                exp = WindowNotFound("wait timeout occurred")
-            tep.unregister(sp.stdout)
-            tep.close()
-            sp.terminate()
-            if exp:
-                raise exp
-            fpO.write('Success\n')
-            fpO.flush()
-        else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except (OSError, subprocess.CalledProcessError, WindowNotFound) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
-
-
-def bringXApp(name):
-    global stopped
-    try:
-        winname = fpI.readline().strip()
-        execname = fpI.readline().strip()
-        timeout = float(fpI.readline().strip())
-        if not stopped:
+        if 'call' in message:
             try:
-                focusWindowArgs('any', winname)
-            except (subprocess.CalledProcessError, WindowNotFound) as e:
-                sp = subprocess.Popen([execname])
-                t0 = time.time()
-                wf = False
-                wfexcp = None
-                while ((time.time() - t0) < max(timeout, 0.1)) and not wf:
-                    time.sleep(
-                        0.1)  # needs to be replace with some kind of polling
-                    try:
-                        focusWindowArgs('any', winname)
-                        wf = True
-                    except WindowNotFound as e:
-                        wfexcp = e
-
-                if not wf:
-                    raise wfexcp
-
-            fpO.write('Success\n')
-            fpO.flush()
+                command = 'handle_call_' + message['call']
+                del message['call']
+                LOG.debug("Received command: %s, %s " % (command, message))
+                getattr(self, command)(**message)
+            except Exception as e:
+                LOG.exception("Failed to process message.")
+                self.sendMsg(error=str(e))
+        elif 'cast' in message:
+            try:
+                command = 'handle_cast_' + message['cast']
+                del message['cast']
+                LOG.debug("Received command: %s, %s " % (command, message))
+                getattr(self, command)(**message)
+            except Exception as e:
+                LOG.exception("Failed to process message.")
         else:
-            fpO.write(
-                'Failure: Server is stopped, please resume it before continuing\n')
-            fpO.flush()
-    except (OSError, subprocess.CalledProcessError, WindowNotFound) as e:
-        mess = 'Failure: ' + str(e)
-        print mess
-        fpO.write(mess + '\n')
-        fpO.flush()
-        stopped = True
+            LOG.warning("Unknown message: %s" % str(message))
 
-fdic = {
-    "getXCtx": getXCtx,
-    "sendXText": sendXText,
-    "sendXKeys": sendXInput,
-    "sendXMouse": sendXInput,
-    "doResume": doResume,
-    "focusXWindow": focusXWindow,
-    "startXApp": startXApp,
-    "bringXApp": bringXApp,
-    "waitXWindow": waitXWindow,
-    "hideXWindow": hideXWindow,
-}
+    def handle_call_handshake(self, identity):
+        LOG.info("Connected to client %s" % identity)
+        self.sendMsg(message="Connected", identity=__identifier__)
+
+    def handle_call_getXCtx(self):
+        window = self.wm.getActiveWindow()
+        self.sendMsg(window_name=window.get_wm_name(),
+                     window_class=str(window.get_wm_class()),
+                     window_id=window.id,
+                     executable=window_executable(self.wm, window))
+
+    def handle_cast_sendXText(self, text):
+        cmd = ["xdotool", "key", "-clearmodifiers"]
+        res = parseStr2xdotool(text)
+        if res:
+            cmd.extend(res)
+            subprocess.check_call(cmd)
+
+    def handle_cast_sendXKeys(self, keys):
+        keys = keys.split(',')
+
+        for key in keys:
+            cmd = ["xdotool"]
+            tcmd = parseKey2xdotool(key)
+            cmd.extend(tcmd[0])
+            subprocess.check_call(cmd)
+            if tcmd[1]:
+                time.sleep(tcmd[1])
+
+    def handle_cast_sendXMouse(self, moves):
+        moves = premousesep.split(moves)
+
+        for move in moves:
+            cmd = ["xdotool"]
+            tcmd = parseMouse2xdotool(self.wm, move)
+            cmd.extend(tcmd[0])
+            subprocess.check_call(cmd)
+            if tcmd[1]:
+                time.sleep(tcmd[1])
+
+    def handle_cast_sendNotification(self, message):
+        command = ["notify-send", "-t", "1000", message]
+        reactor.spawnProcess(LoggingProcessProtocol("notify-send"),
+                             command[0], command,
+                             env=os.environ)
+
+    def find_window(self, executable='', title=''):
+        for window in self.wm.getClientList():
+            cmdline = " ".join(window_executable(self.wm, window))
+            if executable not in cmdline and \
+               title not in window.get_wm_name().lower() and \
+               title not in str(window.get_wm_class()).lower():
+                continue
+            return window
+
+    def handle_cast_hideXWindowById(self, id):
+        actions = self.wm.getWmAllowedActions(self.getActiveWindow(), str=True)
+        if '_NET_WM_ACTION_MINIMIZE' not in actions:
+            self.handle_cast_sendNotification("WM doesn't support Minimising.")
+            return
+        window = self.wm.getActiveWindow()
+        window.set_wm_state(state=Xlib.Xutil.IconicState, icon=0)
+        self.wm.display.flush()
+
+    def handle_cast_hideXWindow(self, title):
+        actions = self.wm.getWmAllowedActions(self.getActiveWindow(), str=True)
+        if '_NET_WM_ACTION_MINIMIZE' not in actions:
+            self.handle_cast_sendNotification("WM doesn't support Minimising.")
+            return
+        window = self.find_window(title=title)
+        window.set_wm_state(state=Xlib.Xutil.IconicState, icon=0)
+        self.wm.display.flush()
+
+    def handle_cast_focusXWindowById(self, id):
+        window = self.wm.display.create_resource_object('window',
+                                                        int(value))
+        self.wm.setActiveWindow(window)
+        self.wm.display.flush()
+        return True
+
+    def handle_cast_focusXWindow(self, executable='', title=''):
+        title = title.lower()
+        assert executable and title, "Missing executable and title"
+        window = self.find_window(executable, title)
+        if not window:
+            raise WindowNotFound('Could not activate window: ' + title)
+        self.wm.setActiveWindow(window)
+        self.wm.display.flush()
+        return window
+
+    def handle_call_waitXWindow(self, title='', executable='', timeout=1.0):
+        window = handle_cast_focusXWindow(executable=executable, title=title)
+        start_time = time.time()
+        while self.wm.getActiveWindow() != window.id:
+            time.sleep(0.1)
+            if time >= start_time:
+                raise Exception("Timed out.")
+        self.handle_call_getXCtx()
+
+    def handle_cast_bringXApp(self, executable):
+        # XXX Using [0] is a bit vague.
+        window = self.find_window(executable[0])
+        if window:
+            self.wm.setActiveWindow(window)
+            self.wm.display.flush()
+        else:
+            self.handle_cast_startXApp(executable)
+
+    def handle_cast_startXApp(self, executable, cwd=None):
+        reactor.spawnProcess(LoggingProcessProtocol(executable[0]),
+                             executable[0], executable,
+                             env=os.environ,
+                             path=cwd or os.getcwd())
+
+    def handle_cast_sendEmacs(self, lisp):
+        command = ["emacsclient", "--eval"]
+        command.append("(with-current-buffer"
+                       " (window-buffer"
+                       "  (frame-selected-window"
+                       "   (selected-frame))) %s)" % lisp)
+        reactor.spawnProcess(LoggingProcessProtocol('emacsclient'),
+                             command[0], command,
+                             env=os.environ)
+
+    def handle_call_sendEmacs(self, lisp):
+        command = ["--eval"]
+        command.append("(with-current-buffer"
+                       " (window-buffer"
+                       "  (frame-selected-window"
+                       "   (selected-frame))) %s)" % lisp)
+        d = utils.getProcessOutput("emacsclient", command,
+                                   env=os.environ)
+        d.addCallback(lambda x: self.sendMsg(major_mode=x.strip()))
+
+    def handle_cast_sendStumpWM(self, arguments):
+        command = ["stumpish"] + arguments
+        reactor.spawnProcess(LoggingProcessProtocol(command[0]),
+                             command[0], command,
+                             env=os.environ)
+
+
+class DamselflyFactory(protocol.Factory):
+
+    def buildProtocol(self, addr):
+        return DamselflyServer()
+
 
 if __name__ == "__main__":
-    while not done:
-        connect()
+    reactor.listenTCP(8123, DamselflyFactory())
+    reactor.run()
