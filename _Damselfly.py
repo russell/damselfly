@@ -24,7 +24,8 @@ import json
 import time
 
 from dragonfly import (Grammar, Rule, MappingRule, CompoundRule,
-                       Dictation, IntegerRef, Context, ActionBase)
+                       Dictation, IntegerRef, Context, ActionBase,
+                       Choice)
 
 from dragonfly.actions.action_base import DynStrActionBase
 
@@ -59,20 +60,25 @@ LOG.info("Loaded " + __identifier__)
 
 connected = False
 windowCache = {}
-HOST, PORT = "localhost", 8123
+
+servers = {"sparky": ("localhost", 8123),
+           "kieran": ("kieran.dev", 8123)}
+
+current_server = "sparky"
+previous_server = "kieran"
 
 # Create a socket (SOCK_STREAM means a TCP socket)
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 
-def connect():
+def connect(host, port):
     global sock, connected
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1.0)
         # Connect to server and send data
-        LOG.info('Opening connection to server.')
-        sock.connect((HOST, PORT))
+        LOG.info('Opening connection to server. %s:%s' % (host, port))
+        sock.connect((host, port))
         connected = True
         server_id = call("handshake", identity=__identifier__)
         LOG.info('Connected. %s' % server_id)
@@ -83,8 +89,7 @@ def connect():
 
 def sendMsg(**kwargs):
     if connected is not True:
-        connect()
-
+        connect(*servers[current_server])
     try:
         data = json.dumps(kwargs)
         LOG.info("Sending %s" % data)
@@ -533,10 +538,16 @@ class EmacsContext(XAppContext):
 #
 
 class ConnectRule(CompoundRule):
-    spec = "damselfly connect"
+    spec = "damselfly connect [<server>]"
+    extras = [Choice("server", dict([(e, e) for e in servers.keys()]))]
 
     def _process_recognition(self, node, extras):
-        connect()
+        global previous_server, current_server
+        server = extras.get('server', current_server)
+        connect(*servers[server])
+        if current_server == server:
+            previous_server = current_server
+            current_server = server
 
 
 class DisconnectRule(CompoundRule):
