@@ -507,6 +507,7 @@ class EmacsIProgn(EmacsEval):
 
 
 class EmacsContext(XAppContext):
+    _cache = cache(1)
 
     def __init__(self, wmname=None, wmclass=None, wid=None,
                  usereg=False, major_mode=''):
@@ -521,7 +522,7 @@ class EmacsContext(XAppContext):
     def matches(self, executable, title, handle):
         if not super(EmacsContext, self).matches(executable, title, handle):
             return False
-        major_mode = call('sendEmacs', lisp='major-mode')['major_mode']
+        major_mode = self._cache(call)('sendEmacs', lisp='major-mode')['major_mode']
         LOG.info('Emacs context: %s' % major_mode)
         if self.usereg:
             if self.major_mode.search(major_mode) is None:
