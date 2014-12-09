@@ -388,27 +388,56 @@ class XText(DynStrActionBase):
         self.camel = camel
 
     def _parse_spec(self, spec):
-        self._pspec = spec
-        return self
+        return spec
 
-    def _execute_events(self, events):
-        tspec = self._pspec
+    def _mutate_text(self, text):
         if self.lower:
-            tspec = tspec.lower()
+            text = text.lower()
         elif self.title:
-            tspec = tspec.title()
+            text = text.title()
         elif self.upper:
-            tspec = tspec.upper()
+            text = text.upper()
         elif self.camel:
-            tspec = tspec.title()
-            tspec = tspec[:1].lower() + tspec[1:]
+            text = text.title()
+            text = text[:1].lower() + text[1:]
 
         if self.space is False:
-            tspec = tspec.replace(' ', '')
+            text = text.replace(' ', '')
         elif self.space is not True:
-            tspec = tspec.replace(' ', self.space)
+            text = text.replace(' ', self.space)
+        return text
 
-        return cast('sendXText', text=tspec)
+    def _mutate_data(self, data):
+        return dict((k, self._mutate_text(v))
+                    for k, v in data.iteritems())
+
+    def _execute(self, data=None):
+        if self._static:
+            # If static, the events have already been parsed by the
+            #  initialize() method.
+            self._execute_events(self._events)
+
+        else:
+            # If not static, now is the time to build the dynamic spec,
+            #  parse it, and execute the events.
+
+            if not data:
+                spec = self._spec
+            else:
+                try:
+                    spec = self._spec % self._mutate_data(data)
+                except KeyError:
+                    self._log_exec.error("%s: Spec %r doesn't match data %r."
+                                         % (self, self._spec, data))
+                    return False
+
+            self._log_exec.debug("%s: Parsing dynamic spec: %r"
+                                 % (self, spec))
+            events = self._parse_spec(spec)
+            self._execute_events(events)
+
+    def _execute_events(self, events):
+        return cast('sendXText', text=events)
 
 
 class DoNothing(ActionBase):
@@ -450,7 +479,7 @@ class EmacsICmd(EmacsEval):
         return cast('sendEmacs', lisp=lisp % data)
 
 
-class EmacsIKey(DynStrActionBase):
+class EmacsIKey(XText):
 
     def __init__(self, spec, static=False):
         super(EmacsIKey, self).__init__(str(spec), static)
@@ -478,25 +507,9 @@ class EmacsIText(EmacsIKey):
         self.camel = camel
 
     def _execute_events(self, events):
-        tspec = self._pspec
-        if self.lower:
-            tspec = tspec.lower()
-        elif self.title:
-            tspec = tspec.title()
-        elif self.upper:
-            tspec = tspec.upper()
-        elif self.camel:
-            tspec = tspec.title()
-            tspec = tspec[:1].lower() + tspec[1:]
-
-        if self.space is False:
-            tspec = tspec.replace(' ', '')
-        elif self.space is not True:
-            tspec = tspec.replace(' ', self.space)
-
         lisp = ("(progn"
                 " (execute-kbd-macro \"%s\")"
-                " (undo-boundary))" % tspec)
+                " (undo-boundary))" % events)
         return cast('sendEmacs', lisp=lisp)
 
 
