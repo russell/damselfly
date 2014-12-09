@@ -31,7 +31,7 @@ import psutil
 import ewmh
 import Xlib.Xutil
 import Xlib.Xatom
-from twisted.internet import protocol, reactor, utils
+from twisted.internet import protocol, reactor, utils, defer
 from twisted.protocols.basic import LineReceiver
 
 
@@ -713,6 +713,30 @@ class DamselflyServer(LineReceiver):
                      window_id=window.id,
                      executable=window_executable(self.wm, window))
 
+    def context_X11(self):
+        window = self.wm.getActiveWindow()
+        return {"window_name": window.get_wm_name(),
+                "window_class": str(window.get_wm_class()),
+                "window_id": window.id,
+                "executable": window_executable(self.wm, window)}
+
+    def context_emacs(self):
+        lisp = 'major-mode'
+        d = self._call_emacs(lisp)
+        d.addCallback(lambda x: {"major_mode": x.strip()})
+        return d
+
+    @defer.inlineCallbacks
+    def handle_call_getContext(self):
+        ctx = {}
+        ctx.update(dict(("X11:" + k, v)
+                        for k, v in self.context_X11().iteritems()))
+        emacs_ctx = yield self.context_emacs()
+        # self.context_emacs_completions()
+        ctx.update(dict(("emacs:" + k, v)
+                        for k, v in emacs_ctx.iteritems()))
+        self.sendLine(json.dumps(ctx))
+
     def handle_cast_sendXText(self, text):
         cmd = ["xdotool", "key", "-clearmodifiers"]
         res = parseStr2xdotool(text)
@@ -816,24 +840,20 @@ class DamselflyServer(LineReceiver):
                              env=os.environ,
                              path=cwd or os.getcwd())
 
-    def handle_cast_sendEmacs(self, lisp):
-        command = ["emacsclient", "--eval"]
-        command.append("(with-current-buffer"
-                       " (window-buffer"
-                       "  (frame-selected-window"
-                       "   (selected-frame))) %s)" % lisp)
-        reactor.spawnProcess(LoggingProcessProtocol('emacsclient'),
-                             command[0], command,
-                             env=os.environ)
-
-    def handle_call_sendEmacs(self, lisp):
+    def _call_emacs(self, lisp):
         command = ["--eval"]
         command.append("(with-current-buffer"
                        " (window-buffer"
                        "  (frame-selected-window"
                        "   (selected-frame))) %s)" % lisp)
-        d = utils.getProcessOutput("emacsclient", command,
-                                   env=os.environ)
+        return utils.getProcessOutput("emacsclient", command,
+                                      env=os.environ)
+
+    def handle_cast_sendEmacs(self, lisp):
+        self._call_emacs(lisp)
+
+    def handle_call_sendEmacs(self, lisp):
+        d = self._call_emacs(lisp)
         d.addCallback(lambda x: self.sendMsg(major_mode=x.strip()))
 
     def handle_cast_sendStumpWM(self, arguments):

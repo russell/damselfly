@@ -172,8 +172,23 @@ def getXCtx():
         LOG.info('response received: %s' % xctx)
         return xctx
 
-# custom contexts
 
+@cache(1)
+def getContext():
+    if connected:
+        LOG.info('Requesting context.')
+        ctx = call('getContext')
+        LOG.info('response received: %s' % ctx)
+        return ctx
+
+
+def currentContext(namespace, key):
+    return getContext().get(namespace + ':' + key)
+
+
+#
+# Custom Contexts
+#
 
 def reCmp(pattern, string):
     return pattern.search(string) is not None
@@ -217,31 +232,33 @@ class XAppContext(Context):
     def matches(self, executable, title, handle):
         if not connected:
             return False
-
         if self.emptyCtx:
             return True
 
         iMatch = True
-
-        ctx = getXCtx()
+        wmname = currentContext('X11', 'window_name')
+        wmclass = currentContext('X11', 'window_class')
+        wid = currentContext('X11', 'window_id')
 
         if self.either:
             iMatch &= self.myCmp(
-                self.wmname, ctx[0]) | self.myCmp(self.wmclass, ctx[1])
+                self.wmname, wmname) | self.myCmp(self.wmclass, wmclass)
         else:
             if self.wmname:
-                iMatch &= self.myCmp(self.wmname, ctx[0])
+                iMatch &= self.myCmp(self.wmname, wmname)
 
             if self.wmclass:
-                iMatch &= self.myCmp(self.wmclass, ctx[1])
+                iMatch &= self.myCmp(self.wmclass, wmclass)
 
         if self.wid:
-            iMatch &= (ctx[2] == self.wid)
+            iMatch &= (self.wid == wid)
 
         return iMatch
 
-# custom actions: prepare for the babbyscape
 
+#
+# Custom Actions
+#
 
 class FocusXWindow(DynStrActionBase):
 
@@ -408,7 +425,7 @@ class XText(DynStrActionBase):
         return text
 
     def _mutate_data(self, data):
-        return dict((k, self._mutate_text(v))
+        return dict((k, self._mutate_text(str(v)))
                     for k, v in data.iteritems())
 
     def _execute(self, data=None):
@@ -531,8 +548,7 @@ class EmacsContext(XAppContext):
     def matches(self, executable, title, handle):
         if not super(EmacsContext, self).matches(executable, title, handle):
             return False
-        major_mode = self._cache(call)('sendEmacs', lisp='major-mode')['major_mode']
-        LOG.info('Emacs context: %s' % major_mode)
+        major_mode = currentContext('emacs', 'major_mode')
         if self.usereg:
             if self.major_mode.search(major_mode) is None:
                 return False
