@@ -484,10 +484,6 @@ class EmacsIKey(XText):
     def __init__(self, spec, static=False):
         super(EmacsIKey, self).__init__(str(spec), static)
 
-    def _parse_spec(self, spec):
-        self._pspec = spec
-        return self
-
     def _execute_events(self, events):
         lisp = ("(progn"
                 " (execute-kbd-macro (read-kbd-macro \"%s\"))"
